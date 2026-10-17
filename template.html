@@ -627,8 +627,10 @@ function applyVoiceRate(){
 async function loadVoice(){
   if (!VO_SRC){ document.getElementById("voBox").style.display = "none"; return; }
   try {
-    const ab = await (await fetch(VO_SRC)).arrayBuffer();
-    VORAW = await new OfflineAudioContext(2, 48000, 48000).decodeAudioData(ab);
+    // decode the embedded base64 directly: fetch() of a data: URL is blocked in some viewers
+    const bin = atob(VO_SRC.slice(VO_SRC.indexOf(",")+1)), ab = new Uint8Array(bin.length);
+    for (let i=0;i<bin.length;i++) ab[i] = bin.charCodeAt(i);
+    VORAW = await new OfflineAudioContext(2, 48000, 48000).decodeAudioData(ab.buffer);
     applyVoiceRate();
   } catch(e){ document.getElementById("voBox").style.display = "none"; status("تعذّر تحميل التعليق الصوتي"); }
 }
