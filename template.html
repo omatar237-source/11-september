@@ -42,12 +42,18 @@
   <label><input id="title" placeholder="ملف القضية"></label>
   <h3>الأسماء (بترتيب الظهور في الفيديو)</h3>
   <div id="names"></div>
+  <h3>الصوت (منخفض ليبقى التعليق الصوتي واضحاً)</h3>
+  <label><input type="checkbox" id="snd" checked style="flex:none"> <span style="width:auto;opacity:.85">موسيقى خلفية + صوت الكتابة</span></label>
+  <label><span style="width:auto;opacity:.7">المستوى</span><input type="range" id="vol" min="0" max="100" value="60" style="padding:0"></label>
   <div class="row">
     <button id="play" class="primary">▶ تشغيل</button>
     <button id="rec">⏺ تسجيل الفيديو</button>
   </div>
   <div class="row">
     <button id="stills">⬇ تصدير اللقطات PNG</button>
+    <button id="wav">⬇ الصوت وحده WAV</button>
+  </div>
+  <div class="row">
     <button id="hide">إخفاء (H)</button>
   </div>
   <div id="status"></div>
