@@ -272,7 +272,7 @@ function buildTimeline(){
   const md = k => k===0 ? Math.max(.8, starts[0] - .05 - intro) : .55;     // move durations
   const moveAt = starts.map((s,k) => k===0 ? intro : s - md(k)*.9);
   TIM = { fadeIn:Math.min(.35, Math.max(.15, intro)), titleIn:[0, .25], titleOut:[intro+.5, intro+.9], fadeOut:1.0,
-          typeStart:.05, typeDur:null, capFade:.12, dip:.2, radial:null };
+          typeStart:0, typeDur:null, typeMax:.28, capFade:.06, capLead:.15, dip:.2, radial:null };
   hold(intro, .01, -1, "00-wide");
   VISIT.forEach((i,k) => {
     const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = md(k);
@@ -283,7 +283,8 @@ function buildTimeline(){
       const n = VISIT.length-1, step = hd*.55/n;
       VISIT.slice(0,-2).concat("hub").forEach((j,m) => LINKS.push({ a:i, b:j, start:TL+hd*.12+m*step, dur:Math.max(.35, step*1.6) }));
     }
-    CAPS.push({ i, t0:TL, t1: last ? TL+hd : moveAt[k+1] + md(k+1) });   // caption stays up through the next move
+    // caption lands a beat before the camera settles and stays up through the next move
+    CAPS.push({ i, t0:TL-TIM.capLead, t1: last ? TL+hd : moveAt[k+1] + md(k+1) - TIM.capLead });
     hold(hd, last ? .08 : .06, i, "0" + num(i) + "-person");
   });
   move({ x:960, y:520, z:1.04 }, .9);
@@ -397,7 +398,7 @@ function drawLight(t, cam){
 }
 
 // typing window for a caption that is up for `dur` seconds (shared by the picture and the key sounds)
-const typeWin = dur => ({ start:TIM.typeStart, len: TIM.typeDur || Math.min(.6, dur*.4) });
+const typeWin = dur => ({ start:TIM.typeStart, len: TIM.typeDur || Math.min(TIM.typeMax, dur*.25) });
 
 function lowerThird(kicker, text, L, dur, top=false){
   const f=TIM.capFade, a=clamp((L-f*.4)/f)*clamp((dur-L)/f);
