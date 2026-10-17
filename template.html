@@ -265,12 +265,14 @@ function buildTimeline(){
 
   // voice-over: every camera move lands on a person just as their phrase starts
   const o = voStart(), starts = cue.cuts.map(c => o + c), speechEnd = o + cue.end;
-  const md = k => k===0 ? .8 : .55;                                       // move durations
-  const moveAt = starts.map((s,k) => s - md(k)*.9);
-  const intro = Math.max(.9, moveAt[0]);
-  TIM = { fadeIn:Math.min(.35, intro*.3), titleIn:[intro*.1, intro*.3], titleOut:[intro*.75, intro*.97], fadeOut:1.0,
+  // the camera starts travelling the moment the voice starts: the first move spans the intro
+  // phrase and lands on person 1 as their phrase begins
+  const intro = Math.max(.05, o);
+  const md = k => k===0 ? Math.max(.8, starts[0] - .05 - intro) : .55;     // move durations
+  const moveAt = starts.map((s,k) => k===0 ? intro : s - md(k)*.9);
+  TIM = { fadeIn:Math.min(.35, Math.max(.15, intro)), titleIn:[0, .25], titleOut:[intro+.5, intro+.9], fadeOut:1.0,
           typeStart:.05, typeDur:null, capFade:.12, dip:.2, radial:null };
-  hold(intro, .05, -1, "00-wide");
+  hold(intro, .01, -1, "00-wide");
   VISIT.forEach((i,k) => {
     const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = md(k);
     LINKS.push({ a:from, b:i, start:TL, dur, follow:true });
