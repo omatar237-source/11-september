@@ -73,6 +73,8 @@ const VO_SRC = "__VO__";
 const SRC = { 1:"__IMG1__", 2:"__IMG2__", 3:"__IMG3__", 4:"__IMG4__", 5:"__IMG5__", 6:"__IMG6__" };
 const DEFAULT_NAMES = ["الاسم غير محدد","الاسم غير محدد","الاسم غير محدد","الاسم غير محدد","الاسم غير محدد"];
 const DEFAULT_TITLE = "ملف القضية";
+// names[photo index] — photo 1 is the centre photo (character 5); see VISIT below
+const PRESET_NAMES = ["محمد عطا","عبد العزيز العمري","سطام السقامي","وائل الشهري","وليد الشهري"];
 const AR = n => String(n).padStart(2,"0").replace(/\d/g, d => "٠١٢٣٤٥٦٧٨٩"[d]);
 
 const W = 1920, H = 1080, S = 2.2;
@@ -97,12 +99,12 @@ const VISIT = [1,2,3,4,0];
 const num = i => VISIT.indexOf(i) + 1;
 const mainIdx = VISIT[VISIT.length-1];
 
-let names = DEFAULT_NAMES.slice(), caseTitle = DEFAULT_TITLE;
+let names = PRESET_NAMES.slice(), caseTitle = DEFAULT_TITLE;
 try {
-  const s = JSON.parse(localStorage.getItem("board-v3") || "null");
+  const s = JSON.parse(localStorage.getItem("board-v4") || "null");
   if (s) { if (Array.isArray(s.names) && s.names.length===5) names = s.names; caseTitle = s.title || DEFAULT_TITLE; }
 } catch(e) {}
-const save = () => { try { localStorage.setItem("board-v3", JSON.stringify({ names, title:caseTitle })); } catch(e) {} };
+const save = () => { try { localStorage.setItem("board-v4", JSON.stringify({ names, title:caseTitle })); } catch(e) {} };
 
 // photo i (0..4, order sent) -> slot
 let PHOTOS = [];
