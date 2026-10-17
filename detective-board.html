@@ -273,14 +273,15 @@ function buildTimeline(){
   // voice-over: the board waits on the wide shot through the intro; the moment each name is
   // spoken the camera sets off to that person and the name types in
   const o = voStart(), starts = cue.cuts.map(c => o + c), speechEnd = o + cue.end;
-  const md = k => k===0 ? .75 : .55;                                       // short moves so the camera reaches the face while the name is still being said
+  // each move uses most of the time until the next name (up to ~1 s) so it can ease gently in and out
+  const md = k => Math.min(k===0 ? 1.0 : .9, ((k<starts.length-1 ? starts[k+1] : starts[k]+2) - starts[k]) * .8);
   TIM = { fadeIn:.35, titleIn:[0, .25], titleOut:[Math.max(.5, starts[0]-.7), Math.max(.8, starts[0]-.3)], fadeOut:1.0,
-          typeStart:0, typeDur:null, typeMax:.28, capFade:.06, dip:.08, dipByDist:true, radial:null };
+          typeStart:0, typeDur:null, typeMax:.28, capFade:.06, dip:.08, dipByDist:true, holdSine:true, radial:null };
   hold(starts[0], .01, -1, "00-wide");
   VISIT.forEach((i,k) => {
     const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = md(k), t0 = TL;
-    LINKS.push({ a:from, b:i, start:TL, dur, follow:true, quick:k===0 });
-    move(last ? { ...close(i), z:1.85 } : close(i), dur, k===0);
+    LINKS.push({ a:from, b:i, start:TL, dur, follow:true });
+    move(last ? { ...close(i), z:1.85 } : close(i), dur);
     const hd = last ? Math.max(1.4, speechEnd + .25 - TL) : Math.max(.2, starts[k+1] - TL);
     if (last){                                                            // radial strings while #5 is spoken about
       const n = VISIT.length-1, step = hd*.55/n;
@@ -293,15 +294,16 @@ function buildTimeline(){
   hold(1.6, -.05, -2, "06-final", { y:540 });
 }
 
+// holdSine: the slow push-in after a move starts from rest, so there is no jolt when the camera lands
 function camAt(t){
   const s = SEQ.find(s => t < s.t0+s.dur) || SEQ[SEQ.length-1];
   const p = clamp((t-s.t0)/s.dur);
   let x,y,z;
-  if (s.k==="h"){ const e=s.focus===-2?ease(p):easeOut(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e); z=lerp(s.a.z,s.b.z,e); }
+  if (s.k==="h"){ const e=s.focus===-2?ease(p):(TIM.holdSine?easeSine(p):easeOut(p)); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e); z=lerp(s.a.z,s.b.z,e); }
   else { const e=s.quick ? easeOut(p) : easeSine(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e);
          z=lerp(s.a.z,s.b.z,e);
          if (s.a.z>1.5 && s.b.z>1.5){   // ease out a little mid-move (more for longer moves) so the pan never whips
-           const dip = TIM.dipByDist ? Math.min(.85, Math.hypot(s.b.x-s.a.x, s.b.y-s.a.y)/1250) : TIM.dip;
+           const dip = TIM.dipByDist ? Math.min(.45, Math.hypot(s.b.x-s.a.x, s.b.y-s.a.y)/2200) : TIM.dip;
            z -= dip*Math.sin(Math.PI*e); } }
   x += Math.sin(t*.63)*5 + Math.sin(t*1.7)*2; y += Math.cos(t*.51)*4 + Math.sin(t*2.1)*1.5;
   let rot = (Math.sin(t*.37)*.25 + Math.sin(t*.9)*.08) * Math.PI/180;
