@@ -379,26 +379,160 @@ function render(t){
   drawWorld(t, cam); drawLight(t, cam); drawOverlay(t, cam);
 }
 
+// ---------- sound design ----------
+// Everything is synthesised and scheduled on the timeline, so the same code drives live playback,
+// the recorded video and the offline WAV export. It stays low and dark on purpose: most energy sits
+// under 400 Hz, and a wide dip around 1–4 kHz leaves the speech band free for the voice-over.
+const soundOn = () => document.getElementById("snd").checked;
+const soundVol = () => document.getElementById("vol").value / 100;
+
+function noiseBuffer(ac, secs, brown){
+  const b = ac.createBuffer(1, ac.sampleRate*secs, ac.sampleRate), d = b.getChannelData(0), r = rnd(99);
+  let last = 0;
+  for (let i=0;i<d.length;i++){ const w = r()*2-1; if (brown){ last = (last + .02*w)/1.02; d[i] = last*3.5; } else d[i] = w; }
+  return b;
+}
+function impulse(ac, secs){
+  const len = ac.sampleRate*secs, b = ac.createBuffer(2, len, ac.sampleRate), r = rnd(5);
+  for (let c=0;c<2;c++){ const d=b.getChannelData(c); for (let i=0;i<len;i++) d[i]=(r()*2-1)*Math.pow(1-i/len, 3); }
+  return b;
+}
+
+function buildSound(ac, out, t0, vol){
+  const T = s => t0 + s, V = vol * .9;
+  const master = ac.createGain(); master.connect(out);
+  master.gain.setValueAtTime(0, T(0)); master.gain.linearRampToValueAtTime(V, T(1.6));
+  master.gain.setValueAtTime(V, T(TL-1.8)); master.gain.linearRampToValueAtTime(0, T(TL));
+  // voice-over pocket + gentle top-end roll-off
+  const dip = ac.createBiquadFilter(); dip.type="peaking"; dip.frequency.value=2200; dip.Q.value=.6; dip.gain.value=-9;
+  const shelf = ac.createBiquadFilter(); shelf.type="highshelf"; shelf.frequency.value=6000; shelf.gain.value=-6;
+  dip.connect(shelf); shelf.connect(master);
+  const bus = dip;
+  const verb = ac.createConvolver(); verb.buffer = impulse(ac, 3.2);
+  const wet = ac.createGain(); wet.gain.value = .35; verb.connect(wet); wet.connect(bus);
+  const WN = noiseBuffer(ac, 2, false), BN = noiseBuffer(ac, 4, true);
+
+  // 1. dark drone bed (A minor), slowly breathing filter
+  const dLP = ac.createBiquadFilter(); dLP.type="lowpass"; dLP.frequency.value=340; dLP.Q.value=.7;
+  const dG = ac.createGain(); dG.gain.value=.11; dLP.connect(dG); dG.connect(bus); dG.connect(verb);
+  [[55,"sine",.9,0],[55.4,"triangle",.35,0],[82.41,"sine",.45,-4],[110,"triangle",.12,3]].forEach(([f,type,g,det])=>{
+    const o=ac.createOscillator(), og=ac.createGain(); o.type=type; o.frequency.value=f; o.detune.value=det; og.gain.value=g;
+    o.connect(og); og.connect(dLP); o.start(T(0)); o.stop(T(TL+.1)); });
+  const lfo=ac.createOscillator(), lfoG=ac.createGain(); lfo.frequency.value=.06; lfoG.gain.value=110; lfo.connect(lfoG); lfoG.connect(dLP.frequency); lfo.start(T(0)); lfo.stop(T(TL+.1));
+
+  // 2. room tone: very soft brown noise
+  const room=ac.createBufferSource(); room.buffer=BN; room.loop=true;
+  const rLP=ac.createBiquadFilter(); rLP.type="lowpass"; rLP.frequency.value=260;
+  const rG=ac.createGain(); rG.gain.value=.05; room.connect(rLP); rLP.connect(rG); rG.connect(bus); room.start(T(0)); room.stop(T(TL+.1));
+
+  // 3. sparse, low, muffled piano-like notes for the "investigation" mood
+  const notes=[110,130.81,98,82.41,146.83,110,123.47,98,82.41,130.81,110,73.42];
+  for (let k=0, s=2.2; s<TL-3; k++, s+=3.6){
+    const f=notes[k%notes.length], g=ac.createGain(), lp=ac.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=700;
+    g.gain.setValueAtTime(0,T(s)); g.gain.linearRampToValueAtTime(.07,T(s+.02)); g.gain.exponentialRampToValueAtTime(.0005,T(s+3.4));
+    [[1,"triangle",1],[2,"sine",.25]].forEach(([m,type,a])=>{ const o=ac.createOscillator(), oa=ac.createGain(); o.type=type; o.frequency.value=f*m; oa.gain.value=a;
+      o.connect(oa); oa.connect(lp); o.start(T(s)); o.stop(T(s+3.5)); });
+    lp.connect(g); g.connect(bus); g.connect(verb);
+  }
+
+  // 4. soft low "whoosh" on every camera move
+  SEQ.filter(s=>s.k==="m").forEach(s=>{
+    const n=ac.createBufferSource(); n.buffer=BN; n.loop=true;
+    const bp=ac.createBiquadFilter(); bp.type="bandpass"; bp.Q.value=1.1;
+    bp.frequency.setValueAtTime(160,T(s.t0)); bp.frequency.linearRampToValueAtTime(520,T(s.t0+s.dur*.5)); bp.frequency.linearRampToValueAtTime(170,T(s.t0+s.dur));
+    const g=ac.createGain(); g.gain.setValueAtTime(0,T(s.t0)); g.gain.linearRampToValueAtTime(.16,T(s.t0+s.dur*.5)); g.gain.linearRampToValueAtTime(0,T(s.t0+s.dur));
+    n.connect(bp); bp.connect(g); g.connect(bus); g.connect(verb); n.start(T(s.t0)); n.stop(T(s.t0+s.dur+.05));
+  });
+
+  // 5. pin "thock" when a red string reaches its photo (panned to where the photo is)
+  LINKS.forEach(l=>{
+    const at=T(l.start+l.dur), x=pt(l.b).x, pan=ac.createStereoPanner(); pan.pan.value=clamp((x-960)/960*.5,-1,1);
+    const o=ac.createOscillator(), g=ac.createGain(); o.type="sine";
+    o.frequency.setValueAtTime(150,at); o.frequency.exponentialRampToValueAtTime(55,at+.14);
+    g.gain.setValueAtTime(0,at); g.gain.linearRampToValueAtTime(.22,at+.005); g.gain.exponentialRampToValueAtTime(.0005,at+.3);
+    o.connect(g); g.connect(pan); pan.connect(bus); pan.connect(verb); o.start(at); o.stop(at+.32);
+  });
+
+  // 6. keyboard typing, one key per letter exactly as the name types on screen
+  const key = (at, r, accent) => {
+    const n=ac.createBufferSource(); n.buffer=WN; n.playbackRate.value=.8+r()*.4;
+    const hp=ac.createBiquadFilter(); hp.type="bandpass"; hp.frequency.value=3200+r()*1400; hp.Q.value=1.4;
+    const g=ac.createGain(), a=(accent?.11:.075)*(.75+r()*.5);
+    g.gain.setValueAtTime(0,at); g.gain.linearRampToValueAtTime(a,at+.002); g.gain.exponentialRampToValueAtTime(.0003,at+.035);
+    const o=ac.createOscillator(), og=ac.createGain(); o.type="sine"; o.frequency.value=160+r()*40;
+    og.gain.setValueAtTime(0,at); og.gain.linearRampToValueAtTime(.09,at+.003); og.gain.exponentialRampToValueAtTime(.0003,at+.05);
+    const pan=ac.createStereoPanner(); pan.pan.value=.25;           // the caption sits on the right
+    n.connect(hp); hp.connect(g); g.connect(pan); o.connect(og); og.connect(pan); pan.connect(bus);
+    n.start(at); n.stop(at+.05); o.start(at); o.stop(at+.06);
+  };
+  SEQ.filter(s=>s.k==="h" && s.focus>=0).forEach(s=>{
+    const txt=names[s.focus], n=txt.length, r=rnd(17+s.focus);
+    for (let k=1;k<=n;k++){ if (txt[k-1]===" ") continue; key(T(s.t0+.35+.9*(k-1)/n + (r()-.5)*.012), r, false); }
+    key(T(s.t0+1.3), r, true);                                              // final "return"
+  });
+
+  // 7. low impacts: under the opening title and the final reveal
+  [[.8,.32],[SEQ.find(s=>s.focus===-2).t0, .26]].forEach(([s,a])=>{
+    const at=T(s), o=ac.createOscillator(), g=ac.createGain(); o.type="sine";
+    o.frequency.setValueAtTime(70,at); o.frequency.exponentialRampToValueAtTime(32,at+1.8);
+    g.gain.setValueAtTime(0,at); g.gain.linearRampToValueAtTime(a,at+.02); g.gain.exponentialRampToValueAtTime(.0005,at+2.6);
+    o.connect(g); g.connect(bus); g.connect(verb); o.start(at); o.stop(at+2.7);
+  });
+  return master;
+}
+
+let AC=null, ACdest=null, curMaster=null;
+function startAudio(){
+  if (!AC){ AC=new (window.AudioContext||window.webkitAudioContext)(); ACdest=AC.createMediaStreamDestination(); }
+  AC.resume();
+  if (curMaster){ const m=curMaster; m.gain.cancelScheduledValues(AC.currentTime); m.gain.setTargetAtTime(0,AC.currentTime,.05); setTimeout(()=>m.disconnect(),400); curMaster=null; }
+  const t0 = AC.currentTime + .15;
+  if (soundOn()){ const out=AC.createGain(); out.connect(AC.destination); out.connect(ACdest); curMaster=buildSound(AC, out, t0, soundVol()); }
+  return t0;
+}
+
+function encodeWav(buf){
+  const ch=buf.numberOfChannels, len=buf.length, sr=buf.sampleRate, data=new DataView(new ArrayBuffer(44+len*ch*2));
+  const w=(o,s)=>{ for (let i=0;i<s.length;i++) data.setUint8(o+i,s.charCodeAt(i)); };
+  w(0,"RIFF"); data.setUint32(4,36+len*ch*2,true); w(8,"WAVEfmt "); data.setUint32(16,16,true); data.setUint16(20,1,true);
+  data.setUint16(22,ch,true); data.setUint32(24,sr,true); data.setUint32(28,sr*ch*2,true); data.setUint16(32,ch*2,true); data.setUint16(34,16,true);
+  w(36,"data"); data.setUint32(40,len*ch*2,true);
+  const chans=[...Array(ch)].map((_,c)=>buf.getChannelData(c));
+  for (let i=0,o=44;i<len;i++) for (let c=0;c<ch;c++,o+=2){ const v=Math.max(-1,Math.min(1,chans[c][i])); data.setInt16(o, v<0?v*0x8000:v*0x7fff, true); }
+  return new Blob([data],{type:"audio/wav"});
+}
+async function renderSoundtrack(){
+  const sr=48000, oac=new OfflineAudioContext(2, Math.ceil(sr*(TL+.5)), sr);
+  buildSound(oac, oac.destination, 0, soundVol());
+  return oac.startRendering();
+}
+async function exportWav(){
+  setBusy(true); status("جارٍ إنشاء ملف الصوت…");
+  const buf = await renderSoundtrack();
+  download(encodeWav(buf), "detective-board-soundtrack.wav");
+  setBusy(false); status("تم تنزيل الصوت ✓ — ضعه تحت التعليق الصوتي في برنامج المونتاج");
+}
+
 // ---------- playback / recording / stills ----------
 let start=null, playing=false, recorder=null;
-function loop(now){
+function loop(){
   if (!playing) return;
-  if (start===null) start=now;
-  const t=(now-start)/1000;
+  const t=Math.max(0, AC.currentTime-start);           // audio clock drives the picture, so sound stays in sync
   render(Math.min(t,TL));
   if (t<TL) requestAnimationFrame(loop); else finish();
 }
-function play(){ start=null; playing=true; requestAnimationFrame(loop); }
+function play(){ start=startAudio(); playing=true; requestAnimationFrame(loop); }
 function finish(){ playing=false; if (recorder && recorder.state==="recording") recorder.stop(); }
 const status = m => document.getElementById("status").textContent = m;
-function setBusy(b){ ["play","rec","stills"].forEach(id=>document.getElementById(id).disabled=b); }
+function setBusy(b){ ["play","rec","stills","wav"].forEach(id=>document.getElementById(id).disabled=b); }
 function download(blob, name){ const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 4000); }
 
 function record(){
-  const types=["video/mp4;codecs=avc1.640028","video/mp4","video/webm;codecs=vp9","video/webm"];
+  const types=["video/mp4;codecs=avc1.640028,mp4a.40.2","video/mp4;codecs=avc1.640028","video/mp4","video/webm;codecs=vp9,opus","video/webm"];
   const type=types.find(t=>window.MediaRecorder && MediaRecorder.isTypeSupported(t));
   if (!type){ status("المتصفح لا يدعم التسجيل. استخدم Chrome أو Edge."); return; }
-  const chunks=[], stream=cv.captureStream(30);
+  if (!AC){ AC=new (window.AudioContext||window.webkitAudioContext)(); ACdest=AC.createMediaStreamDestination(); }
+  const chunks=[], stream=new MediaStream([...cv.captureStream(30).getVideoTracks(), ...(soundOn() ? ACdest.stream.getAudioTracks() : [])]);
   recorder=new MediaRecorder(stream,{ mimeType:type, videoBitsPerSecond:14e6 });
   recorder.ondataavailable=e=>e.data.size&&chunks.push(e.data);
   recorder.onstop=()=>{
@@ -439,6 +573,7 @@ function buildUI(){
   document.getElementById("play").onclick=()=>{ document.body.classList.add("hidden"); play(); };
   document.getElementById("rec").onclick=record;
   document.getElementById("stills").onclick=exportStills;
+  document.getElementById("wav").onclick=exportWav;
   document.getElementById("hide").onclick=()=>document.body.classList.add("hidden");
   document.getElementById("show").onclick=()=>document.body.classList.remove("hidden");
   addEventListener("keydown",e=>{ if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT") return;
