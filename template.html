@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>لوحة التحقيق</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&family=Reem+Kufi:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#000; --panel:rgba(18,14,12,.92); --ink:#efe6d2; --accent:#b3141b; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink); font-family:Cairo, sans-serif; overflow:hidden; }
+  #stage { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { width:min(100vw, calc(100vh * 16 / 9)); height:auto; aspect-ratio:16/9; display:block; background:#000; }
+  #panel { position:fixed; top:16px; right:16px; width:320px; max-width:calc(100vw - 32px); background:var(--panel);
+           border:1px solid #3a2a20; border-radius:10px; padding:14px; z-index:5; font-size:14px; box-shadow:0 10px 40px rgba(0,0,0,.6); }
+  #panel h2 { margin:0 0 6px; font-size:17px; }
+  #panel p { margin:0 0 10px; opacity:.7; font-size:12px; line-height:1.6; }
+  #panel label { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+  #panel label span { width:22px; opacity:.6; }
+  #panel input { flex:1; background:#0d0a08; color:var(--ink); border:1px solid #4a3a2e; border-radius:6px; padding:6px 8px; font:inherit; }
+  .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  button { flex:1; background:#2a1d16; color:var(--ink); border:1px solid #5a4030; border-radius:6px; padding:8px 10px; font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:#d23a3a; }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { margin-top:8px; font-size:12px; opacity:.8; min-height:1.2em; }
+  #show { position:fixed; top:16px; right:16px; z-index:4; display:none; flex:none; }
+  body.hidden #panel { display:none; }
+  body.hidden #show { display:block; opacity:.15; }
+  body.hidden #show:hover { opacity:1; }
+  body.recording #show { display:none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<button id="show">⚙</button>
+<div id="panel">
+  <h2>لوحة التحقيق</h2>
+  <p>اكتب اسم كل شخصية حسب ترتيب الصور المرفقة، ثم شغّل المشهد أو سجّله كملف فيديو (16:9 ، 1920×1080).</p>
+  <div id="names"></div>
+  <div class="row">
+    <button id="play" class="primary">▶ تشغيل</button>
+    <button id="rec">⏺ تسجيل وتنزيل</button>
+  </div>
+  <div class="row">
+    <button id="hide">إخفاء اللوحة (H)</button>
+  </div>
+  <div id="status"></div>
+</div>
+
+<script>
+const SRC = { 1:"__IMG1__", 2:"__IMG2__", 3:"__IMG3__", 4:"__IMG4__", 5:"__IMG5__", 6:"__IMG6__" };
+const DEFAULT_NAMES = ["الشخصية الأولى","الشخصية الثانية","الشخصية الثالثة","الشخصية الرابعة","الشخصية الخامسة"];
+const AR = n => String(n).padStart(2,"0").replace(/\d/g, d => "٠١٢٣٤٥٦٧٨٩"[d]);
+
+const W = 1920, H = 1080, S = 2.2;           // S = supersampling for pre-rendered layers
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+
+// ---------- layout (world coords = 1920x1080 at zoom 1) ----------
+const BOARD = { x:160, y:90, w:1600, h:900 };
+const PHOTOS = [
+  { img:1, x:525,  y:330, h:205, rot:-4   },
+  { img:2, x:965,  y:282, h:270, rot: 3   },
+  { img:3, x:1405, y:330, h:265, rot:-2.5 },
+  { img:4, x:690,  y:700, h:262, rot: 2.5 },
+  { img:5, x:1240, y:712, h:258, rot:-3   },
+];
+const ORDER = [0,1,2,4,3];                    // camera visit order
+
+let names = DEFAULT_NAMES.slice();
+try { const s = JSON.parse(localStorage.getItem("board-names")); if (Array.isArray(s) && s.length===5) names = s; } catch(e) {}
+
+// ---------- helpers ----------
+const clamp = (v,a=0,b=1) => Math.max(a, Math.min(b, v));
+const lerp = (a,b,t) => a + (b-a)*t;
+const ease = t => t<.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+const easeOut = t => 1 - Math.pow(1-t,3);
+function mk(w,h){ const c=document.createElement("canvas"); c.width=Math.ceil(w); c.height=Math.ceil(h); return c; }
+function rnd(seed){ let s=seed; return () => (s = (s*16807) % 2147483647) / 2147483647; }
+function loadImg(src){ return new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=src; }); }
+
+// ---------- pre-rendered assets ----------
+let IM = {}, STATIC, PRINTS = [], TAGS = [], NOISE = [], NODES = [], LINKS = [];
+
+function buildStatic(){
+  const c = mk(W*S, H*S), g = c.getContext("2d"); g.scale(S,S);
+  // wall
+  g.fillStyle = "#0d0a08"; g.fillRect(0,0,W,H);
+  const r = rnd(7);
+  for (let i=0;i<9000;i++){ g.fillStyle = `rgba(${r()<.5?255:0},${r()<.5?230:0},200,${r()*.035})`; g.fillRect(r()*W, r()*H, 1+r()*2, 1+r()*2); }
+  // board drop shadow
+  g.save(); g.shadowColor="rgba(0,0,0,.85)"; g.shadowBlur=60; g.shadowOffsetY=25;
+  g.fillStyle="#2a1a10"; g.fillRect(BOARD.x-22, BOARD.y-22, BOARD.w+44, BOARD.h+44); g.restore();
+  // wooden frame
+  const wood = g.createLinearGradient(0,BOARD.y-22,0,BOARD.y+BOARD.h+22);
+  wood.addColorStop(0,"#4a2e19"); wood.addColorStop(.5,"#2f1c0f"); wood.addColorStop(1,"#1c1008");
+  g.fillStyle = wood; g.fillRect(BOARD.x-22, BOARD.y-22, BOARD.w+44, BOARD.h+44);
+  for (let i=0;i<260;i++){ g.strokeStyle=`rgba(0,0,0,${r()*.25})`; g.lineWidth=r()*1.5; const y=BOARD.y-22+r()*(BOARD.h+44);
+    g.beginPath(); g.moveTo(BOARD.x-22,y); g.lineTo(BOARD.x+BOARD.w+22,y+r()*4-2); g.stroke(); }
+  // cork (from attached board image), tiled twice for finer grain
+  const cork = IM[6], sx=80, sy=210, sw=640, sh=370;
+  for (let ix=0; ix<2; ix++) for (let iy=0; iy<2; iy++)
+    g.drawImage(cork, sx,sy,sw,sh, BOARD.x+ix*BOARD.w/2, BOARD.y+iy*BOARD.h/2, BOARD.w/2+1, BOARD.h/2+1);
+  g.fillStyle="rgba(60,30,10,.18)"; g.fillRect(BOARD.x,BOARD.y,BOARD.w,BOARD.h);
+  // inner shadow
+  const sides = [[BOARD.x,BOARD.y,BOARD.w,40,0,1],[BOARD.x,BOARD.y+BOARD.h-40,BOARD.w,40,0,-1]];
+  for (const [x,y,w,h,_,d] of sides){ const lg=g.createLinearGradient(0,d>0?y:y+h,0,d>0?y+h:y); lg.addColorStop(0,"rgba(0,0,0,.55)"); lg.addColorStop(1,"rgba(0,0,0,0)"); g.fillStyle=lg; g.fillRect(x,y,w,h); }
+  for (const [x,d] of [[BOARD.x,1],[BOARD.x+BOARD.w-40,-1]]){ const lg=g.createLinearGradient(d>0?x:x+40,0,d>0?x+40:x,0); lg.addColorStop(0,"rgba(0,0,0,.5)"); lg.addColorStop(1,"rgba(0,0,0,0)"); g.fillStyle=lg; g.fillRect(x,BOARD.y,40,BOARD.h); }
+  // old pin holes
+  for (let i=0;i<70;i++){ g.fillStyle="rgba(20,10,4,.6)"; g.beginPath(); g.arc(BOARD.x+30+r()*(BOARD.w-60), BOARD.y+30+r()*(BOARD.h-60), 1.4, 0, 7); g.fill(); }
+
+  drawDecor(g, r);
+  return c;
+}
+
+function paper(g, x, y, w, h, rot, color, fn){
+  g.save(); g.translate(x,y); g.rotate(rot*Math.PI/180);
+  g.shadowColor="rgba(0,0,0,.5)"; g.shadowBlur=14; g.shadowOffsetX=4; g.shadowOffsetY=7;
+  g.fillStyle=color; g.fillRect(-w/2,-h/2,w,h); g.shadowColor="transparent";
+  const lg=g.createLinearGradient(-w/2,-h/2,w/2,h/2); lg.addColorStop(0,"rgba(255,255,255,.08)"); lg.addColorStop(1,"rgba(0,0,0,.18)");
+  g.fillStyle=lg; g.fillRect(-w/2,-h/2,w,h);
+  fn && fn(g,w,h); g.restore();
+}
+
+function drawDecor(g, r){
+  // case file card (centre)
+  paper(g, 965, 596, 290, 120, -1.5, "#c9a86a", (g,w,h)=>{
+    g.fillStyle="#3b2a14"; g.textAlign="center"; g.direction="rtl";
+    g.font="700 34px 'Reem Kufi', Cairo"; g.fillText("ملف القضية", 0, -6);
+    g.font="400 16px Cairo"; g.fillText("قيد التحقيق — رقم ٠٤٧/ب", 0, 26);
+    g.save(); g.rotate(-.18); g.strokeStyle="rgba(170,20,20,.75)"; g.lineWidth=3; g.strokeRect(70,-52,76,30);
+    g.fillStyle="rgba(170,20,20,.8)"; g.font="900 18px Cairo"; g.fillText("سري", 108,-30); g.restore();
+  });
+  // sticky notes
+  const note = (x,y,rot,txt)=>paper(g,x,y,130,120,rot,"#e8d36a",(g)=>{ g.fillStyle="#2b2b6b"; g.textAlign="center"; g.direction="rtl"; g.font="700 30px Cairo"; g.fillText(txt,0,12); });
+  note(300, 560, 6, "من هم؟");
+  note(1625, 545, -5, "الصلة؟");
+  // newspaper scraps
+  const news = (x,y,w,h,rot)=>paper(g,x,y,w,h,rot,"#d8d3c4",(g,w,h)=>{
+    g.fillStyle="#2a2a2a"; g.fillRect(-w/2+14,-h/2+14,w-28,16);
+    for (let i=0;i<Math.floor((h-50)/11);i++){ const cols=2; for (let c2=0;c2<cols;c2++){ const cw=(w-38)/2; g.fillStyle=`rgba(40,40,40,${.35+r()*.25})`;
+      g.fillRect(-w/2+14+c2*(cw+10), -h/2+42+i*11, cw*(.7+r()*.3), 4); } } });
+  news(310, 230, 190, 150, -7);
+  news(1610, 855, 200, 160, 4);
+  // map scrap
+  paper(g, 300, 860, 210, 150, 3, "#cfd6c4", (g,w,h)=>{
+    g.strokeStyle="rgba(60,90,70,.45)"; g.lineWidth=1;
+    for (let i=-w/2;i<w/2;i+=18){ g.beginPath(); g.moveTo(i,-h/2); g.lineTo(i,h/2); g.stroke(); }
+    for (let i=-h/2;i<h/2;i+=18){ g.beginPath(); g.moveTo(-w/2,i); g.lineTo(w/2,i); g.stroke(); }
+    g.strokeStyle="rgba(80,60,40,.6)"; g.lineWidth=3; g.beginPath(); g.moveTo(-w/2,20); g.bezierCurveTo(-30,-40,20,60,w/2,-10); g.stroke();
+    g.strokeStyle="#b3141b"; g.lineWidth=3; g.beginPath(); g.arc(18,8,14,0,7); g.stroke();
+  });
+  // handwritten question marks / marker scribbles
+  g.fillStyle="rgba(170,25,25,.55)"; g.font="900 64px Cairo"; g.textAlign="center";
+  g.fillText("؟", 1130, 470); g.fillText("؟", 800, 520);
+}
+
+function makePrint(img, h){
+  const w = h*img.width/img.height, b = 12, k = S*1.2;
+  const c = mk((w+2*b)*k, (h+2*b)*k), g = c.getContext("2d"); g.scale(k,k);
+  g.fillStyle="#f1ece1"; g.fillRect(0,0,w+2*b,h+2*b);
+  g.filter="grayscale(.35) sepia(.25) contrast(1.1) brightness(.93)";
+  g.drawImage(img, b, b, w, h); g.filter="none";
+  const gl = g.createLinearGradient(0,0,w,h); gl.addColorStop(0,"rgba(255,255,255,.10)"); gl.addColorStop(.45,"rgba(255,255,255,0)"); gl.addColorStop(1,"rgba(0,0,0,.18)");
+  g.fillStyle=gl; g.fillRect(b,b,w,h);
+  g.strokeStyle="rgba(0,0,0,.25)"; g.lineWidth=1; g.strokeRect(b,b,w,h);
+  return { c, w:w+2*b, h:h+2*b };
+}
+
+function makeTag(i){
+  ctx.font = "700 28px Cairo";
+  const tw = ctx.measureText(names[i]).width;
+  const w = Math.max(230, tw + 56), h = 70, k = S*1.2;
+  const c = mk(w*k, h*k), g = c.getContext("2d"); g.scale(k,k);
+  g.fillStyle="#ece3cf"; g.fillRect(0,0,w,h);
+  const r = rnd(31+i); for (let j=0;j<300;j++){ g.fillStyle=`rgba(90,70,40,${r()*.08})`; g.fillRect(r()*w,r()*h,1.5,1.5); }
+  g.direction="rtl"; g.textAlign="center"; g.fillStyle="#8e1a1a"; g.font="700 14px Cairo";
+  g.fillText("الشخصية " + AR(i+1), w/2, 21);
+  g.fillStyle="#17120e"; g.font="700 28px Cairo"; g.fillText(names[i], w/2, 55);
+  return { c, w, h };
+}
+
+function buildNodes(){
+  NODES = PRINTS.map((p,i)=>({ x:PHOTOS[i].x, y:PHOTOS[i].y - PHOTOS[i].h/2 - 4 }));
+  NODES.push({x:965,y:543},{x:300,y:508},{x:1625,y:493},{x:310,y:162},{x:1610,y:782},{x:300,y:792});
+  // 5=case 6=note1 7=note2 8=news1 9=news2 10=map
+  LINKS = [[0,1],[1,2],[0,3],[3,4],[4,2],[1,5],[3,5],[4,5],[0,6],[2,7],[0,8],[4,9],[3,10],[6,10],[7,9]];
+}
+
+function makeNoise(){
+  for (let n=0;n<6;n++){ const c=mk(480,270), g=c.getContext("2d"), d=g.createImageData(480,270);
+    for (let i=0;i<d.data.length;i+=4){ const v=Math.random()*255; d.data[i]=d.data[i+1]=d.data[i+2]=v; d.data[i+3]=255; }
+    g.putImageData(d,0,0); NOISE.push(c); }
+}
+
+// ---------- camera timeline ----------
+const WIDE = { x:960, y:540, z:.96 };
+const SEQ = []; let TL = 0;
+(function buildTimeline(){
+  let cur = { ...WIDE };
+  const hold = (dur, push, focus) => { const a={...cur}, b={...cur, z:cur.z+push}; SEQ.push({k:"h", a, b, dur, focus, t0:TL}); TL+=dur; cur=b; };
+  const move = (to, dur) => { SEQ.push({k:"m", a:{...cur}, b:{...to}, dur, t0:TL}); TL+=dur; cur={...to}; };
+  hold(5.0, .07, -1);
+  for (const i of ORDER){ const p=PHOTOS[i]; move({ x:p.x, y:p.y+42, z:2.05 }, 1.9); hold(3.0, .12, i); }
+  move({ ...WIDE, z:1.0 }, 2.6); hold(3.6, .06, -2);
+})();
+
+function camAt(t){
+  const s = SEQ.find(s => t < s.t0+s.dur) || SEQ[SEQ.length-1];
+  const p = clamp((t-s.t0)/s.dur);
+  let x,y,z;
+  if (s.k==="h"){ const e=easeOut(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e); z=lerp(s.a.z,s.b.z,e); }
+  else { const e=ease(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e);
+         z=lerp(s.a.z,s.b.z,e); if (s.a.z>1.5 && s.b.z>1.5) z -= .45*Math.sin(Math.PI*e); }
+  // subtle handheld drift
+  x += Math.sin(t*.63)*5 + Math.sin(t*1.7)*2; y += Math.cos(t*.51)*4 + Math.sin(t*2.1)*1.5;
+  const rot = (Math.sin(t*.37)*.25 + Math.sin(t*.9)*.08) * Math.PI/180;
+  return { x, y, z, rot, seg:s, p, local:(t-s.t0) };
+}
+
+// ---------- drawing ----------
+function drawString(a, b, prog){
+  if (prog<=0) return;
+  const dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy);
+  const cx=(a.x+b.x)/2, cy=(a.y+b.y)/2 + d*.07;
+  const len = d*1.04;
+  ctx.save(); ctx.lineCap="round";
+  ctx.setLineDash([len*prog, len*2]);
+  ctx.strokeStyle="rgba(0,0,0,.45)"; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.moveTo(a.x+4,a.y+8); ctx.quadraticCurveTo(cx+4,cy+10,b.x+4,b.y+8); ctx.stroke();
+  ctx.strokeStyle="#a5121a"; ctx.lineWidth=2.6;
+  ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.quadraticCurveTo(cx,cy,b.x,b.y); ctx.stroke();
+  ctx.strokeStyle="rgba(255,120,110,.35)"; ctx.lineWidth=.8;
+  ctx.beginPath(); ctx.moveTo(a.x,a.y-.6); ctx.quadraticCurveTo(cx,cy-.6,b.x,b.y-.6); ctx.stroke();
+  ctx.restore();
+}
+
+function drawPin(x,y,z){
+  ctx.save();
+  ctx.fillStyle="rgba(0,0,0,.45)"; ctx.beginPath(); ctx.ellipse(x+5,y+8,9,6,0,0,7); ctx.fill();
+  const rg=ctx.createRadialGradient(x-3,y-3,1,x,y,10); rg.addColorStop(0,"#ff8a80"); rg.addColorStop(.35,"#d31f26"); rg.addColorStop(1,"#5e0a0d");
+  ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(x,y,9.5,0,7); ctx.fill();
+  ctx.restore();
+}
+
+function drawWorld(t, cam){
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.translate(W/2,H/2); ctx.rotate(cam.rot); ctx.scale(cam.z,cam.z); ctx.translate(-cam.x,-cam.y);
+  ctx.drawImage(STATIC, 0,0,STATIC.width,STATIC.height, 0,0,W,H);
+  // strings draw themselves in during the opening shot
+  LINKS.forEach(([a,b],k)=> drawString(NODES[a], NODES[b], clamp((t-1.2-k*.22)/1.1)));
+  // photos + tags
+  PHOTOS.forEach((P,i)=>{
+    const pr=PRINTS[i], tg=TAGS[i];
+    ctx.save(); ctx.translate(P.x,P.y); ctx.rotate(P.rot*Math.PI/180);
+    ctx.shadowColor="rgba(0,0,0,.6)"; ctx.shadowBlur=18*cam.z; ctx.shadowOffsetX=6*cam.z; ctx.shadowOffsetY=11*cam.z;
+    ctx.drawImage(pr.c, -pr.w/2, -pr.h/2, pr.w, pr.h);
+    ctx.restore();
+    const ty = P.y + pr.h/2 + 8 + tg.h/2;
+    ctx.save(); ctx.translate(P.x, ty); ctx.rotate((-P.rot*.6)*Math.PI/180);
+    ctx.shadowColor="rgba(0,0,0,.5)"; ctx.shadowBlur=10*cam.z; ctx.shadowOffsetX=3*cam.z; ctx.shadowOffsetY=6*cam.z;
+    ctx.drawImage(tg.c, -tg.w/2, -tg.h/2, tg.w, tg.h);
+    ctx.shadowColor="transparent";
+    ctx.fillStyle="rgba(235,225,190,.55)";
+    for (const sx of [-1,1]){ ctx.save(); ctx.translate(sx*(tg.w/2-6), -tg.h/2+4); ctx.rotate(sx*.5); ctx.fillRect(-22,-9,44,18); ctx.restore(); }
+    ctx.restore();
+  });
+  NODES.forEach(n=>drawPin(n.x,n.y,cam.z));
+}
+
+const DUST = Array.from({length:90}, (_,i)=>{ const r=rnd(100+i); return { x:r()*W, y:r()*H, s:.6+r()*2.2, v:.15+r()*.5, ph:r()*6.28, a:.08+r()*.3 }; });
+
+function drawLight(t, cam){
+  ctx.setTransform(1,0,0,1,0,0);
+  // flicker: slow breathing + rare dips
+  let fl = 1 + Math.sin(t*7.3)*.015 + Math.sin(t*13.1)*.01;
+  if ((t%6.7) > 6.45) fl -= .12*Math.sin(((t%6.7)-6.45)/.25*Math.PI);
+  // warm overhead lamp beam (top-right), screen blend
+  ctx.globalCompositeOperation="screen";
+  const bx = W*.62 + Math.sin(t*.2)*30;
+  const beam = ctx.createRadialGradient(bx, -120, 40, bx, H*.35, H*.95);
+  beam.addColorStop(0,`rgba(255,190,120,${.22*fl})`); beam.addColorStop(.5,`rgba(255,160,90,${.07*fl})`); beam.addColorStop(1,"rgba(0,0,0,0)");
+  ctx.fillStyle=beam; ctx.fillRect(0,0,W,H);
+  // dust in the beam
+  for (const d of DUST){
+    const x = (d.x + t*d.v*14 + Math.sin(t*.5+d.ph)*20) % W, y = (d.y + Math.sin(t*.3+d.ph)*30 + t*d.v*6) % H;
+    const inBeam = clamp(1 - Math.hypot((x-bx)/900, (y-H*.35)/700));
+    ctx.fillStyle=`rgba(255,220,170,${d.a*inBeam*fl})`; ctx.beginPath(); ctx.arc(x,y,d.s,0,7); ctx.fill();
+  }
+  // darkness falloff (spotlight on the subject)
+  ctx.globalCompositeOperation="source-over";
+  const vg = ctx.createRadialGradient(W*.52, H*.46, H*.18, W*.5, H*.5, H*1.02);
+  vg.addColorStop(0,"rgba(0,0,0,0)"); vg.addColorStop(.6,`rgba(0,0,0,${.45/fl})`); vg.addColorStop(1,`rgba(0,0,0,${.92})`);
+  ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
+  // colour grade: teal shadows / warm mids
+  ctx.globalCompositeOperation="soft-light"; ctx.fillStyle="rgba(30,70,80,.35)"; ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation="overlay"; ctx.globalAlpha=.07; ctx.drawImage(NOISE[Math.floor(t*24)%NOISE.length],0,0,W,H);
+  ctx.globalAlpha=1; ctx.globalCompositeOperation="source-over";
+}
+
+function drawOverlay(t, cam){
+  ctx.setTransform(1,0,0,1,0,0); ctx.direction="rtl";
+  const s = cam.seg;
+  // opening title
+  const ta = clamp((t-.8)/1)*clamp((4.6-t)/.8);
+  if (ta>0){
+    ctx.fillStyle=`rgba(0,0,0,${.55*ta})`; ctx.fillRect(0,0,W,H);
+    ctx.save(); ctx.globalAlpha=ta; ctx.textAlign="center";
+    ctx.shadowColor="rgba(0,0,0,.9)"; ctx.shadowBlur=30;
+    ctx.fillStyle="#efe6d2"; ctx.font="700 92px 'Reem Kufi', Cairo"; ctx.fillText("ملف القضية", W/2, H/2+10);
+    ctx.fillStyle="#c2262c"; ctx.font="700 30px Cairo"; ctx.fillText("سري للغاية", W/2, H/2+66);
+    ctx.restore();
+  }
+  // lower third while holding on a face (typewriter reveal)
+  if (s.k==="h" && s.focus>=0){
+    const i=s.focus, L=cam.local, a=clamp((L-.15)/.35)*clamp((s.dur-L)/.35);
+    const nm=names[i], shown=nm.slice(0, Math.ceil(nm.length*clamp((L-.35)/.9)));
+    ctx.save(); ctx.globalAlpha=a;
+    const x=W-110, y=H-150;
+    const lg=ctx.createLinearGradient(W,0,W-760,0); lg.addColorStop(0,"rgba(0,0,0,.9)"); lg.addColorStop(.6,"rgba(0,0,0,.7)"); lg.addColorStop(1,"rgba(0,0,0,0)");
+    ctx.fillStyle=lg; ctx.fillRect(W-760, y-62, 760, 120);
+    ctx.fillStyle="#c2262c"; ctx.fillRect(x+16, y-50, 5, 92);
+    ctx.textAlign="right"; ctx.fillStyle="#d9534f"; ctx.font="700 22px Cairo"; ctx.fillText("الشخصية " + AR(i+1), x, y-20);
+    ctx.fillStyle="#f4ecdb"; ctx.font="900 50px Cairo"; ctx.fillText(shown + ((L*2|0)%2 && shown.length<nm.length ? "▌" : ""), x, y+32);
+    ctx.restore();
+  }
+  // fades
+  const fade = Math.max(clamp(1 - t/1.2), clamp((t-(TL-1.6))/1.6));
+  if (fade>0){ ctx.fillStyle=`rgba(0,0,0,${fade})`; ctx.fillRect(0,0,W,H); }
+  // letterbox hairline bars for a scope feel
+  ctx.fillStyle="#000"; ctx.fillRect(0,0,W,34); ctx.fillRect(0,H-34,W,34);
+}
+
+function render(t){
+  const cam = camAt(t);
+  ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle="#000"; ctx.fillRect(0,0,W,H);
+  drawWorld(t, cam); drawLight(t, cam); drawOverlay(t, cam);
+}
+
+// ---------- playback / recording ----------
+let start=null, playing=false, recorder=null;
+function loop(now){
+  if (!playing) return;
+  if (start===null) start=now;
+  const t=(now-start)/1000;
+  render(Math.min(t,TL));
+  if (t<TL) requestAnimationFrame(loop); else finish();
+}
+function play(){ start=null; playing=true; requestAnimationFrame(loop); }
+function finish(){
+  playing=false;
+  if (recorder && recorder.state==="recording") recorder.stop();
+}
+const status = m => document.getElementById("status").textContent = m;
+
+function record(){
+  const types=["video/mp4;codecs=avc1.640028","video/mp4","video/webm;codecs=vp9","video/webm"];
+  const type=types.find(t=>window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+  if (!type){ status("المتصفح لا يدعم التسجيل. استخدم Chrome أو Edge."); return; }
+  const chunks=[], stream=cv.captureStream(30);
+  recorder=new MediaRecorder(stream,{ mimeType:type, videoBitsPerSecond:14e6 });
+  recorder.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+  recorder.onstop=()=>{
+    const blob=new Blob(chunks,{type}), a=document.createElement("a");
+    a.href=URL.createObjectURL(blob); a.download="detective-board."+(type.includes("mp4")?"mp4":"webm"); a.click();
+    document.body.classList.remove("recording","hidden"); setBusy(false); status("تم التنزيل ✓ ("+(blob.size/1e6).toFixed(1)+" MB)");
+  };
+  document.body.classList.add("recording","hidden"); setBusy(true);
+  status("جارٍ التسجيل… أبقِ هذه النافذة ظاهرة ("+Math.round(TL)+" ثانية)");
+  recorder.start(250); play();
+}
+function setBusy(b){ document.getElementById("play").disabled=b; document.getElementById("rec").disabled=b; }
+
+// ---------- UI ----------
+function buildUI(){
+  const box=document.getElementById("names");
+  names.forEach((n,i)=>{
+    const l=document.createElement("label"); l.innerHTML=`<span>${AR(i+1)}</span>`;
+    const inp=document.createElement("input"); inp.value=n; inp.placeholder=DEFAULT_NAMES[i];
+    inp.oninput=()=>{ names[i]=inp.value.trim()||DEFAULT_NAMES[i]; TAGS[i]=makeTag(i);
+      try{ localStorage.setItem("board-names", JSON.stringify(names)); }catch(e){}
+      if(!playing) render(8.9 + ORDER.indexOf(i)*4.9); };
+    l.appendChild(inp); box.appendChild(l);
+  });
+  document.getElementById("play").onclick=()=>{ document.body.classList.add("hidden"); play(); };
+  document.getElementById("rec").onclick=record;
+  document.getElementById("hide").onclick=()=>document.body.classList.add("hidden");
+  document.getElementById("show").onclick=()=>document.body.classList.remove("hidden");
+  addEventListener("keydown",e=>{ if(e.target.tagName==="INPUT") return;
+    if(e.key==="h"||e.key==="H") document.body.classList.toggle("hidden");
+    if(e.key===" "){ e.preventDefault(); play(); } });
+}
+
+(async function init(){
+  const fontsReady = Promise.all(["700 30px Cairo","900 30px Cairo","400 16px Cairo","700 30px 'Reem Kufi'"].map(f=>document.fonts.load(f)));
+  await Promise.race([fontsReady, new Promise(r=>setTimeout(r,2500))]);
+  for (const k of Object.keys(SRC)) IM[k]=await loadImg(SRC[k]);
+  STATIC=buildStatic();
+  PRINTS=PHOTOS.map(p=>makePrint(IM[p.img], p.h));
+  TAGS=PHOTOS.map((_,i)=>makeTag(i));
+  buildNodes(); makeNoise(); buildUI();
+  render(TL-2.6);                           // poster frame: wide shot with all strings
+  const q=new URLSearchParams(location.search).get("t"); if(q!==null) render(+q);
+  window.__render=render; window.__TL=TL;
+})();
+</script>
+</body>
+</html>
