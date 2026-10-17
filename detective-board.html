@@ -270,27 +270,23 @@ function buildTimeline(){
     return;
   }
 
-  // voice-over: every camera move lands on a person just as their phrase starts
+  // voice-over: the board waits on the wide shot through the intro; the moment each name is
+  // spoken the camera sets off to that person and the name types in
   const o = voStart(), starts = cue.cuts.map(c => o + c), speechEnd = o + cue.end;
-  // the camera starts travelling the moment the voice starts: the first move spans the intro
-  // phrase and lands on person 1 as their phrase begins
-  const intro = Math.max(.05, o);
-  const md = k => k===0 ? Math.max(.8, starts[0] - .05 - intro) : .6;      // every picture-to-picture move takes the same time
-  const moveAt = starts.map((s,k) => k===0 ? intro : s - md(k)*.9);
-  TIM = { fadeIn:Math.min(.35, Math.max(.15, intro)), titleIn:[0, .25], titleOut:[intro+.5, intro+.9], fadeOut:1.0,
-          typeStart:0, typeDur:null, typeMax:.28, capFade:.06, capLead:.15, dip:.08, dipByDist:true, radial:null };
-  hold(intro, .01, -1, "00-wide");
+  const md = k => k===0 ? .75 : .55;                                       // short moves so the camera reaches the face while the name is still being said
+  TIM = { fadeIn:.35, titleIn:[0, .25], titleOut:[Math.max(.5, starts[0]-.7), Math.max(.8, starts[0]-.3)], fadeOut:1.0,
+          typeStart:0, typeDur:null, typeMax:.28, capFade:.06, dip:.08, dipByDist:true, radial:null };
+  hold(starts[0], .01, -1, "00-wide");
   VISIT.forEach((i,k) => {
-    const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = md(k);
+    const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = md(k), t0 = TL;
     LINKS.push({ a:from, b:i, start:TL, dur, follow:true, quick:k===0 });
-    move(last ? { ...close(i), z:1.85 } : close(i), dur, k===0);           // first move takes off immediately
-    const hd = last ? Math.max(1.4, speechEnd + .25 - TL) : Math.max(.3, moveAt[k+1] - TL);
+    move(last ? { ...close(i), z:1.85 } : close(i), dur, k===0);
+    const hd = last ? Math.max(1.4, speechEnd + .25 - TL) : Math.max(.2, starts[k+1] - TL);
     if (last){                                                            // radial strings while #5 is spoken about
       const n = VISIT.length-1, step = hd*.55/n;
       VISIT.slice(0,-2).concat("hub").forEach((j,m) => LINKS.push({ a:i, b:j, start:TL+hd*.12+m*step, dur:Math.max(.35, step*1.6) }));
     }
-    // caption lands a beat before the camera settles and stays up through the next move
-    CAPS.push({ i, t0:TL-TIM.capLead, t1: last ? TL+hd : moveAt[k+1] + md(k+1) - TIM.capLead });
+    CAPS.push({ i, t0, t1:TL+hd });                                         // caption types with the name, stays until the next name
     hold(hd, last ? .08 : .06, i, "0" + num(i) + "-person");
   });
   move({ x:960, y:520, z:1.04 }, .9);
