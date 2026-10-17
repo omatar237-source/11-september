@@ -49,6 +49,7 @@
     <label><input type="checkbox" id="vo" checked style="flex:none"> <span style="width:auto;opacity:.85">التعليق الصوتي <span id="voLen"></span></span></label>
     <label><span style="width:auto;opacity:.7">يبدأ عند (ثانية)</span><input type="number" id="voStart" min="0" step="0.1" value="0.4"></label>
     <label><span style="width:auto;opacity:.7">مستوى الصوت</span><input type="range" id="voVol" min="0" max="100" value="80" style="padding:0"></label>
+    <label><span style="width:auto;opacity:.7">السرعة <b id="voRateLbl">×1.00</b></span><input type="range" id="voRate" min="0.7" max="1.5" step="0.05" value="1" style="padding:0"></label>
   </div>
   <div class="row">
     <button id="play" class="primary">▶ تشغيل</button>
@@ -574,12 +575,53 @@ function addVoice(ac, mix, T, duck){
   if (active) duck.gain.setTargetAtTime(1, T(s0 + VOBUF.duration), .35);
 }
 
+// WSOLA time-stretch: changes the speed of the voice without changing its pitch.
+// Each 40 ms grain is taken near where the speed says it should be, nudged (±12 ms) to the spot
+// that best lines up with the previous grain's natural continuation, then overlap-added.
+function stretch(buf, speed){
+  if (Math.abs(speed-1) < .001) return buf;
+  const sr = buf.sampleRate, N = Math.round(sr*.04) & ~1, Hs = N/2, Ha = Hs*speed, tol = Math.round(sr*.012);
+  const len = buf.length, outLen = Math.ceil(len/speed) + N, chs = buf.numberOfChannels;
+  const inp = [...Array(chs)].map((_,c)=>buf.getChannelData(c)), mono = new Float32Array(len);
+  for (let c=0;c<chs;c++) for (let i=0;i<len;i++) mono[i] += inp[c][i]/chs;
+  const win = new Float32Array(N); for (let i=0;i<N;i++) win[i] = .5 - .5*Math.cos(2*Math.PI*i/N);
+  const out = [...Array(chs)].map(()=>new Float32Array(outLen));
+  let prev = 0;
+  for (let k=0; ; k++){
+    const target = Math.round(k*Ha), o = k*Hs;
+    if (target + N >= len || o + N >= outLen) break;
+    let pos = target;
+    if (k>0){
+      const nat = prev + Hs; let best = -Infinity;
+      for (let dlt=-tol; dlt<=tol; dlt+=2){
+        const p = target + dlt; if (p<0 || p+N>=len) continue;
+        let s = 0; for (let i=0;i<N;i+=4) s += mono[p+i]*mono[nat+i];
+        if (s > best){ best = s; pos = p; }
+      }
+    }
+    for (let c=0;c<chs;c++){ const a=inp[c], b=out[c]; for (let i=0;i<N;i++) b[o+i] += a[pos+i]*win[i]; }
+    prev = pos;
+  }
+  const res = new AudioBuffer({ length:outLen, numberOfChannels:chs, sampleRate:sr });
+  out.forEach((d,c)=>res.copyToChannel(d,c));
+  return res;
+}
+
+let VORAW = null;
+const voRate = () => +document.getElementById("voRate").value || 1;
+function applyVoiceRate(){
+  if (!VORAW) return;
+  VOBUF = stretch(VORAW, voRate());
+  document.getElementById("voRateLbl").textContent = "×" + voRate().toFixed(2);
+  document.getElementById("voLen").textContent = "(" + (VORAW.duration/voRate()).toFixed(1) + " ث)";
+}
+
 async function loadVoice(){
   if (!VO_SRC){ document.getElementById("voBox").style.display = "none"; return; }
   try {
     const ab = await (await fetch(VO_SRC)).arrayBuffer();
-    VOBUF = await new OfflineAudioContext(2, 48000, 48000).decodeAudioData(ab);
-    document.getElementById("voLen").textContent = "(" + VOBUF.duration.toFixed(1) + " ث)";
+    VORAW = await new OfflineAudioContext(2, 48000, 48000).decodeAudioData(ab);
+    applyVoiceRate();
   } catch(e){ document.getElementById("voBox").style.display = "none"; status("تعذّر تحميل التعليق الصوتي"); }
 }
 
@@ -678,6 +720,9 @@ function buildUI(){
   document.getElementById("wav").onclick=exportWav;
   const retime=()=>{ buildTimeline(); window.__TL=TL; window.__SHOTS=SHOTS; if(!playing) render(TL-.8); status("مدة الفيديو: "+TL.toFixed(1)+" ثانية"); };
   document.getElementById("vo").onchange=retime; document.getElementById("voStart").oninput=retime;
+  const rate=document.getElementById("voRate");
+  rate.oninput=()=>{ document.getElementById("voRateLbl").textContent="×"+voRate().toFixed(2); };
+  rate.onchange=()=>{ status("جارٍ ضبط سرعة الصوت…"); setTimeout(()=>{ applyVoiceRate(); retime(); }, 20); };
   document.getElementById("hide").onclick=()=>document.body.classList.add("hidden");
   document.getElementById("show").onclick=()=>document.body.classList.remove("hidden");
   addEventListener("keydown",e=>{ if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT") return;
