@@ -195,13 +195,8 @@ function makeTag(i){
 
 const pinOf = i => ({ x:PHOTOS[i].x, y:PHOTOS[i].y - PRINTS[i].h/2 + 6 });
 
-// strings: solid = every photo is part of the case file (hub); dashed = possible lead from the main evidence
-function links(){
-  const L = [];
-  [mainIdx, ...[0,1,2,3,4].filter(i=>i!==mainIdx)].forEach(i => L.push({ a:HUB, b:()=>pinOf(i), to:i, dashed:false }));
-  [0,1,2,3,4].filter(i=>i!==mainIdx).forEach(i => L.push({ a:()=>pinOf(mainIdx), b:()=>pinOf(i), to:i, dashed:true }));
-  return L;
-}
+// strings are scheduled in buildTimeline: each one draws while the camera travels to that person
+const pt = x => x==="hub" ? HUB : pinOf(x);
 
 function makeNoise(){
   for (let n=0;n<6;n++){ const c=mk(480,270), g=c.getContext("2d"), d=g.createImageData(480,270);
@@ -209,24 +204,30 @@ function makeNoise(){
     g.putImageData(d,0,0); NOISE.push(c); }
 }
 
-// ---------- camera timeline (the 5 shots of the brief) ----------
+// ---------- camera timeline ----------
 const WIDE = { x:960, y:540, z:.96 };
-let SEQ = [], TL = 0, REVEAL = 0, SHOTS = [];
+let SEQ = [], TL = 0, SHOTS = [], LINKS = [];
 function buildTimeline(){
-  SEQ = []; TL = 0; SHOTS = [];
+  SEQ = []; TL = 0; SHOTS = []; LINKS = [];
   let cur = { ...WIDE };
   const hold = (dur, push, focus, label, dz) => { const a={...cur}, b={...cur, z:cur.z+push, ...(dz||{})};
     SEQ.push({k:"h", a, b, dur, focus, t0:TL}); if (label) SHOTS.push({ label, t:TL+dur*.7 }); TL+=dur; cur=b; };
   const move = (to, dur) => { SEQ.push({k:"m", a:{...cur}, b:{...to}, dur, t0:TL}); TL+=dur; cur={...to}; };
   const close = i => ({ x:PHOTOS[i].x, y:PHOTOS[i].y+44, z:2.0 });
 
-  hold(4.6, .06, -1, "01-wide");                                          // 1. wide establishing
-  move({ ...close(mainIdx), z:1.9 }, 3.4); hold(3.8, .2, mainIdx, "02-main"); // 2. slow zoom to main evidence
-  const others = [0,1,2,3,4].filter(i=>i!==mainIdx).sort((a,b)=>PHOTOS[a].slot-PHOTOS[b].slot);
-  others.forEach(i => { move(close(i), 2.0); hold(3.0, .12, i, "03-evidence-" + (i+1)); });   // 3. each piece of evidence
-  move({ x:960, y:500, z:1.14 }, 2.6);                                    // 4. reveal connections
-  REVEAL = TL; hold(7.0, -.04, -3, "04-connections");
-  hold(4.6, -.16, -2, "05-final", { y:540 });                              // 5. dramatic full board
+  hold(4.6, .06, -1, "00-wide");                                          // wide establishing, no strings yet
+  VISIT.forEach((i,k) => {
+    const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = k===0 ? 3.0 : 2.2;
+    // the string unrolls from the previous person to this one as the camera travels along it
+    LINKS.push({ a:from, b:i, start:TL, dur, follow:true });
+    move(last ? { ...close(i), z:1.85 } : close(i), dur);
+    if (last){                                                            // #5 (centre): ties back to everyone else
+      VISIT.slice(0,-2).concat("hub").forEach((j,m) => LINKS.push({ a:i, b:j, start:TL+1.4+m*.45, dur:1.5 }));
+      hold(4.6, .1, i, "0" + num(i) + "-person");
+    } else hold(3.2, .12, i, "0" + num(i) + "-person");
+  });
+  move({ x:960, y:520, z:1.04 }, 3.0);                                    // pull back: the whole web
+  hold(4.4, -.08, -2, "06-final", { y:540 });                              // dramatic full board + fade
 }
 
 function camAt(t){
@@ -272,10 +273,9 @@ function drawPin(x,y,glow){
 }
 
 function stringProgress(t){
-  const L = links(), solid = L.filter(l=>!l.dashed).length;
-  return L.map((l,k) => {
-    const start = REVEAL + .5 + (l.dashed ? 3.2 + (k-solid)*.45 : k*.45);
-    return { ...l, p: clamp((t-start)/1.0), done: t-start-1.0 };
+  return LINKS.map(l => {
+    const p = clamp((t-l.start)/l.dur);
+    return { ...l, to:l.b, p: l.follow ? ease(p) : easeOut(p), done: t-l.start-l.dur };
   });
 }
 
@@ -288,7 +288,7 @@ function drawWorld(t, cam){
   ctx.scale(1.25,1.25); ctx.drawImage(TITLECARD.c, -TITLECARD.w/2, -TITLECARD.h/2, TITLECARD.w, TITLECARD.h); ctx.restore();
   // strings sit behind the prints so they never cover a face
   const SP = stringProgress(t);
-  SP.forEach(l => drawString(typeof l.a==="function"?l.a():l.a, l.b(), l.p, l.dashed));
+  SP.forEach(l => drawString(pt(l.a), pt(l.b), l.p, false));
   PHOTOS.forEach((P,i)=>{
     const pr=PRINTS[i], tg=TAGS[i];
     ctx.save(); ctx.translate(P.x,P.y); ctx.rotate(P.rot*Math.PI/180);
@@ -420,18 +420,16 @@ function rebuild(){ assignSlots(); PRINTS=PHOTOS.map(p=>makePrint(IM[p.img], p.h
 function previewFocus(i){ const s=SEQ.find(s=>s.focus===i); render(s ? s.t0+1.8 : TL-2.5); }
 
 function buildUI(){
-  const box=document.getElementById("names"), sel=document.getElementById("main"), ti=document.getElementById("title");
+  const box=document.getElementById("names"), ti=document.getElementById("title");
   ti.value = caseTitle===DEFAULT_TITLE ? "" : caseTitle;
   ti.oninput=()=>{ caseTitle=ti.value.trim()||DEFAULT_TITLE; TITLECARD=makeTitleCard(); save(); if(!playing) render(TL-2.5); };
-  names.forEach((n,i)=>{
-    const l=document.createElement("label"); l.innerHTML=`<span>${AR(i+1)}</span>`;
-    const inp=document.createElement("input"); inp.value = n===DEFAULT_NAMES[i] ? "" : n; inp.placeholder="اسم صاحب الصورة "+AR(i+1);
+  VISIT.forEach(i=>{
+    const l=document.createElement("label"); l.innerHTML=`<span>${AR(num(i))}</span>`;
+    const inp=document.createElement("input"); inp.value = names[i]===DEFAULT_NAMES[i] ? "" : names[i];
+    inp.placeholder="اسم الشخصية رقم "+AR(num(i)) + (i===mainIdx ? " (الصورة الوسطى)" : "");
     inp.oninput=()=>{ names[i]=inp.value.trim()||DEFAULT_NAMES[i]; TAGS[i]=makeTag(i); save(); if(!playing) previewFocus(i); };
     l.appendChild(inp); box.appendChild(l);
-    const o=document.createElement("option"); o.value=i; o.textContent="الصورة "+AR(i+1); sel.appendChild(o);
   });
-  sel.value=mainIdx;
-  sel.onchange=()=>{ mainIdx=+sel.value; save(); rebuild(); if(!playing) render(TL-2.5); };
   document.getElementById("play").onclick=()=>{ document.body.classList.add("hidden"); play(); };
   document.getElementById("rec").onclick=record;
   document.getElementById("stills").onclick=exportStills;

@@ -40,10 +40,8 @@
   <p>الصور الخمس هي المادة الوحيدة على اللوحة. الأسماء وعنوان القضية تكتبها أنت؛ لا يُضاف أي اسم أو تاريخ أو رابط غير مؤكد.</p>
   <h3>عنوان القضية</h3>
   <label><input id="title" placeholder="ملف القضية"></label>
-  <h3>الأسماء (بترتيب الصور المرسلة)</h3>
+  <h3>الأسماء (بترتيب الظهور في الفيديو)</h3>
   <div id="names"></div>
-  <h3>الدليل الرئيسي (محور اللوحة)</h3>
-  <label><select id="main"></select></label>
   <div class="row">
     <button id="play" class="primary">▶ تشغيل</button>
     <button id="rec">⏺ تسجيل الفيديو</button>
@@ -77,17 +75,23 @@ const SLOTS = [
 const HUB = { x:960, y:116 };                 // pin on the case-title card
 const LEGEND = { x:960, y:858 };
 
-let names = DEFAULT_NAMES.slice(), caseTitle = DEFAULT_TITLE, mainIdx = 0;
+// photo index = order the files were sent (images/1..5). VISIT = order they appear in the video:
+// #1 = file 2, #2 = file 3, #3 = file 4, #4 = file 5, #5 = file 1 (centre photo, shown last)
+const VISIT = [1,2,3,4,0];
+const num = i => VISIT.indexOf(i) + 1;
+const mainIdx = VISIT[VISIT.length-1];
+
+let names = DEFAULT_NAMES.slice(), caseTitle = DEFAULT_TITLE;
 try {
-  const s = JSON.parse(localStorage.getItem("board-v2") || "null");
-  if (s) { if (Array.isArray(s.names) && s.names.length===5) names = s.names; caseTitle = s.title || DEFAULT_TITLE; mainIdx = +s.main || 0; }
+  const s = JSON.parse(localStorage.getItem("board-v3") || "null");
+  if (s) { if (Array.isArray(s.names) && s.names.length===5) names = s.names; caseTitle = s.title || DEFAULT_TITLE; }
 } catch(e) {}
-const save = () => { try { localStorage.setItem("board-v2", JSON.stringify({ names, title:caseTitle, main:mainIdx })); } catch(e) {} };
+const save = () => { try { localStorage.setItem("board-v3", JSON.stringify({ names, title:caseTitle })); } catch(e) {} };
 
 // photo i (0..4, order sent) -> slot
 let PHOTOS = [];
 function assignSlots(){
-  const others = [0,1,2,3,4].filter(i => i!==mainIdx);
+  const others = VISIT.filter(i => i!==mainIdx);
   PHOTOS = [0,1,2,3,4].map(i => { const slot = i===mainIdx ? 0 : 1 + others.indexOf(i); return { img:i+1, slot, ...SLOTS[slot] }; });
 }
 
@@ -126,17 +130,14 @@ function buildStatic(){
   edge(BOARD.x+BOARD.w,0,BOARD.x+BOARD.w-40,0, BOARD.x+BOARD.w-40,BOARD.y,40,BOARD.h);
   for (let i=0;i<60;i++){ g.fillStyle="rgba(20,10,4,.6)"; g.beginPath(); g.arc(BOARD.x+30+r()*(BOARD.w-60), BOARD.y+30+r()*(BOARD.h-60), 1.4, 0, 7); g.fill(); }
 
-  // legend index card: explains what the two kinds of string mean
-  paper(g, LEGEND.x, LEGEND.y, 360, 128, .8, "#e9e1cf", (g,w,h)=>{
+  // legend index card: what the red string means
+  paper(g, LEGEND.x, LEGEND.y, 330, 100, .8, "#e9e1cf", (g,w,h)=>{
     g.strokeStyle="rgba(150,40,40,.35)"; g.lineWidth=1; g.beginPath(); g.moveTo(-w/2,-h/2+34); g.lineTo(w/2,-h/2+34); g.stroke();
     g.strokeStyle="rgba(60,90,140,.18)"; for (let y=-h/2+58; y<h/2; y+=26){ g.beginPath(); g.moveTo(-w/2,y); g.lineTo(w/2,y); g.stroke(); }
     g.direction="rtl"; g.textAlign="right"; g.fillStyle="#3a2a1a"; g.font="700 17px Cairo"; g.fillText("مفتاح اللوحة", w/2-16, -h/2+25);
-    g.font="400 17px Cairo";
-    g.fillText("ضمن ملف القضية", w/2-96, -h/2+70);
-    g.fillText("صلة محتملة — لم تُؤكَّد", w/2-96, -h/2+102);
+    g.font="400 17px Cairo"; g.fillText("صلة بين الأدلة", w/2-96, -h/2+72);
     g.lineCap="round"; g.strokeStyle="#9e1218"; g.lineWidth=3;
-    g.beginPath(); g.moveTo(w/2-82,-h/2+64); g.lineTo(w/2-20,-h/2+64); g.stroke();
-    g.setLineDash([9,7]); g.beginPath(); g.moveTo(w/2-82,-h/2+96); g.lineTo(w/2-20,-h/2+96); g.stroke(); g.setLineDash([]);
+    g.beginPath(); g.moveTo(w/2-82,-h/2+66); g.lineTo(w/2-20,-h/2+66); g.stroke();
   });
   return c;
 }
@@ -177,7 +178,7 @@ function makePrint(img, h){
   return { c, w:w+2*b, h:h+2*b };
 }
 
-const exhibitLabel = i => (i===mainIdx ? "الدليل الرئيسي · " : "دليل رقم ") + AR(i+1);
+const exhibitLabel = i => (i===mainIdx ? "الدليل الرئيسي · " : "دليل رقم ") + AR(num(i));
 
 function makeTag(i){
   ctx.font = "700 28px Cairo";
@@ -194,13 +195,8 @@ function makeTag(i){
 
 const pinOf = i => ({ x:PHOTOS[i].x, y:PHOTOS[i].y - PRINTS[i].h/2 + 6 });
 
-// strings: solid = every photo is part of the case file (hub); dashed = possible lead from the main evidence
-function links(){
-  const L = [];
-  [mainIdx, ...[0,1,2,3,4].filter(i=>i!==mainIdx)].forEach(i => L.push({ a:HUB, b:()=>pinOf(i), to:i, dashed:false }));
-  [0,1,2,3,4].filter(i=>i!==mainIdx).forEach(i => L.push({ a:()=>pinOf(mainIdx), b:()=>pinOf(i), to:i, dashed:true }));
-  return L;
-}
+// strings are scheduled in buildTimeline: each one draws while the camera travels to that person
+const pt = x => x==="hub" ? HUB : pinOf(x);
 
 function makeNoise(){
   for (let n=0;n<6;n++){ const c=mk(480,270), g=c.getContext("2d"), d=g.createImageData(480,270);
@@ -208,24 +204,30 @@ function makeNoise(){
     g.putImageData(d,0,0); NOISE.push(c); }
 }
 
-// ---------- camera timeline (the 5 shots of the brief) ----------
+// ---------- camera timeline ----------
 const WIDE = { x:960, y:540, z:.96 };
-let SEQ = [], TL = 0, REVEAL = 0, SHOTS = [];
+let SEQ = [], TL = 0, SHOTS = [], LINKS = [];
 function buildTimeline(){
-  SEQ = []; TL = 0; SHOTS = [];
+  SEQ = []; TL = 0; SHOTS = []; LINKS = [];
   let cur = { ...WIDE };
   const hold = (dur, push, focus, label, dz) => { const a={...cur}, b={...cur, z:cur.z+push, ...(dz||{})};
     SEQ.push({k:"h", a, b, dur, focus, t0:TL}); if (label) SHOTS.push({ label, t:TL+dur*.7 }); TL+=dur; cur=b; };
   const move = (to, dur) => { SEQ.push({k:"m", a:{...cur}, b:{...to}, dur, t0:TL}); TL+=dur; cur={...to}; };
   const close = i => ({ x:PHOTOS[i].x, y:PHOTOS[i].y+44, z:2.0 });
 
-  hold(4.6, .06, -1, "01-wide");                                          // 1. wide establishing
-  move({ ...close(mainIdx), z:1.9 }, 3.4); hold(3.8, .2, mainIdx, "02-main"); // 2. slow zoom to main evidence
-  const others = [0,1,2,3,4].filter(i=>i!==mainIdx).sort((a,b)=>PHOTOS[a].slot-PHOTOS[b].slot);
-  others.forEach(i => { move(close(i), 2.0); hold(3.0, .12, i, "03-evidence-" + (i+1)); });   // 3. each piece of evidence
-  move({ x:960, y:500, z:1.14 }, 2.6);                                    // 4. reveal connections
-  REVEAL = TL; hold(7.0, -.04, -3, "04-connections");
-  hold(4.6, -.16, -2, "05-final", { y:540 });                              // 5. dramatic full board
+  hold(4.6, .06, -1, "00-wide");                                          // wide establishing, no strings yet
+  VISIT.forEach((i,k) => {
+    const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = k===0 ? 3.0 : 2.2;
+    // the string unrolls from the previous person to this one as the camera travels along it
+    LINKS.push({ a:from, b:i, start:TL, dur, follow:true });
+    move(last ? { ...close(i), z:1.85 } : close(i), dur);
+    if (last){                                                            // #5 (centre): ties back to everyone else
+      VISIT.slice(0,-2).concat("hub").forEach((j,m) => LINKS.push({ a:i, b:j, start:TL+1.4+m*.45, dur:1.5 }));
+      hold(4.6, .1, i, "0" + num(i) + "-person");
+    } else hold(3.2, .12, i, "0" + num(i) + "-person");
+  });
+  move({ x:960, y:520, z:1.04 }, 3.0);                                    // pull back: the whole web
+  hold(4.4, -.08, -2, "06-final", { y:540 });                              // dramatic full board + fade
 }
 
 function camAt(t){
@@ -271,10 +273,9 @@ function drawPin(x,y,glow){
 }
 
 function stringProgress(t){
-  const L = links(), solid = L.filter(l=>!l.dashed).length;
-  return L.map((l,k) => {
-    const start = REVEAL + .5 + (l.dashed ? 3.2 + (k-solid)*.45 : k*.45);
-    return { ...l, p: clamp((t-start)/1.0), done: t-start-1.0 };
+  return LINKS.map(l => {
+    const p = clamp((t-l.start)/l.dur);
+    return { ...l, to:l.b, p: l.follow ? ease(p) : easeOut(p), done: t-l.start-l.dur };
   });
 }
 
@@ -287,7 +288,7 @@ function drawWorld(t, cam){
   ctx.scale(1.25,1.25); ctx.drawImage(TITLECARD.c, -TITLECARD.w/2, -TITLECARD.h/2, TITLECARD.w, TITLECARD.h); ctx.restore();
   // strings sit behind the prints so they never cover a face
   const SP = stringProgress(t);
-  SP.forEach(l => drawString(typeof l.a==="function"?l.a():l.a, l.b(), l.p, l.dashed));
+  SP.forEach(l => drawString(pt(l.a), pt(l.b), l.p, false));
   PHOTOS.forEach((P,i)=>{
     const pr=PRINTS[i], tg=TAGS[i];
     ctx.save(); ctx.translate(P.x,P.y); ctx.rotate(P.rot*Math.PI/180);
@@ -419,18 +420,16 @@ function rebuild(){ assignSlots(); PRINTS=PHOTOS.map(p=>makePrint(IM[p.img], p.h
 function previewFocus(i){ const s=SEQ.find(s=>s.focus===i); render(s ? s.t0+1.8 : TL-2.5); }
 
 function buildUI(){
-  const box=document.getElementById("names"), sel=document.getElementById("main"), ti=document.getElementById("title");
+  const box=document.getElementById("names"), ti=document.getElementById("title");
   ti.value = caseTitle===DEFAULT_TITLE ? "" : caseTitle;
   ti.oninput=()=>{ caseTitle=ti.value.trim()||DEFAULT_TITLE; TITLECARD=makeTitleCard(); save(); if(!playing) render(TL-2.5); };
-  names.forEach((n,i)=>{
-    const l=document.createElement("label"); l.innerHTML=`<span>${AR(i+1)}</span>`;
-    const inp=document.createElement("input"); inp.value = n===DEFAULT_NAMES[i] ? "" : n; inp.placeholder="اسم صاحب الصورة "+AR(i+1);
+  VISIT.forEach(i=>{
+    const l=document.createElement("label"); l.innerHTML=`<span>${AR(num(i))}</span>`;
+    const inp=document.createElement("input"); inp.value = names[i]===DEFAULT_NAMES[i] ? "" : names[i];
+    inp.placeholder="اسم الشخصية رقم "+AR(num(i)) + (i===mainIdx ? " (الصورة الوسطى)" : "");
     inp.oninput=()=>{ names[i]=inp.value.trim()||DEFAULT_NAMES[i]; TAGS[i]=makeTag(i); save(); if(!playing) previewFocus(i); };
     l.appendChild(inp); box.appendChild(l);
-    const o=document.createElement("option"); o.value=i; o.textContent="الصورة "+AR(i+1); sel.appendChild(o);
   });
-  sel.value=mainIdx;
-  sel.onchange=()=>{ mainIdx=+sel.value; save(); rebuild(); if(!playing) render(TL-2.5); };
   document.getElementById("play").onclick=()=>{ document.body.classList.add("hidden"); play(); };
   document.getElementById("rec").onclick=record;
   document.getElementById("stills").onclick=exportStills;
