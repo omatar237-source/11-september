@@ -241,7 +241,7 @@ function buildTimeline(){
   let cur = { ...WIDE };
   const hold = (dur, push, focus, label, dz) => { const a={...cur}, b={...cur, z:cur.z+push, ...(dz||{})};
     SEQ.push({k:"h", a, b, dur, focus, t0:TL}); if (label) SHOTS.push({ label, t:TL+dur*.7 }); TL+=dur; cur=b; };
-  const move = (to, dur) => { SEQ.push({k:"m", a:{...cur}, b:{...to}, dur, t0:TL}); TL+=dur; cur={...to}; };
+  const move = (to, dur, quick) => { SEQ.push({k:"m", a:{...cur}, b:{...to}, dur, t0:TL, quick}); TL+=dur; cur={...to}; };
   const close = i => ({ x:PHOTOS[i].x, y:PHOTOS[i].y+44, z:2.0 });
   const cue = voCues();
 
@@ -275,8 +275,8 @@ function buildTimeline(){
   hold(intro, .01, -1, "00-wide");
   VISIT.forEach((i,k) => {
     const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = md(k);
-    LINKS.push({ a:from, b:i, start:TL, dur, follow:true });
-    move(last ? { ...close(i), z:1.85 } : close(i), dur);
+    LINKS.push({ a:from, b:i, start:TL, dur, follow:true, quick:k===0 });
+    move(last ? { ...close(i), z:1.85 } : close(i), dur, k===0);           // first move takes off immediately
     const hd = last ? Math.max(1.4, speechEnd + .25 - TL) : Math.max(.3, moveAt[k+1] - TL);
     if (last){                                                            // radial strings while #5 is spoken about
       const n = VISIT.length-1, step = hd*.55/n;
@@ -294,7 +294,7 @@ function camAt(t){
   const p = clamp((t-s.t0)/s.dur);
   let x,y,z;
   if (s.k==="h"){ const e=s.focus===-2?ease(p):easeOut(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e); z=lerp(s.a.z,s.b.z,e); }
-  else { const e=ease(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e);
+  else { const e=s.quick ? easeOut(p) : ease(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e);
          z=lerp(s.a.z,s.b.z,e); if (s.a.z>1.5 && s.b.z>1.5) z -= TIM.dip*Math.sin(Math.PI*e); }
   x += Math.sin(t*.63)*5 + Math.sin(t*1.7)*2; y += Math.cos(t*.51)*4 + Math.sin(t*2.1)*1.5;
   let rot = (Math.sin(t*.37)*.25 + Math.sin(t*.9)*.08) * Math.PI/180;
@@ -334,7 +334,7 @@ function drawPin(x,y,glow){
 function stringProgress(t){
   return LINKS.map(l => {
     const p = clamp((t-l.start)/l.dur);
-    return { ...l, to:l.b, p: l.follow ? ease(p) : easeOut(p), done: t-l.start-l.dur };
+    return { ...l, to:l.b, p: l.follow && !l.quick ? ease(p) : easeOut(p), done: t-l.start-l.dur };
   });
 }
 

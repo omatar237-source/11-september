@@ -275,8 +275,8 @@ function buildTimeline(){
   hold(intro, .01, -1, "00-wide");
   VISIT.forEach((i,k) => {
     const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = md(k);
-    LINKS.push({ a:from, b:i, start:TL, dur, follow:true });
-    move(last ? { ...close(i), z:1.85 } : close(i), dur);
+    LINKS.push({ a:from, b:i, start:TL, dur, follow:true, quick:k===0 });
+    move(last ? { ...close(i), z:1.85 } : close(i), dur, k===0);           // first move takes off immediately
     const hd = last ? Math.max(1.4, speechEnd + .25 - TL) : Math.max(.3, moveAt[k+1] - TL);
     if (last){                                                            // radial strings while #5 is spoken about
       const n = VISIT.length-1, step = hd*.55/n;
@@ -334,7 +334,7 @@ function drawPin(x,y,glow){
 function stringProgress(t){
   return LINKS.map(l => {
     const p = clamp((t-l.start)/l.dur);
-    return { ...l, to:l.b, p: l.follow ? ease(p) : easeOut(p), done: t-l.start-l.dur };
+    return { ...l, to:l.b, p: l.follow && !l.quick ? ease(p) : easeOut(p), done: t-l.start-l.dur };
   });
 }
 
