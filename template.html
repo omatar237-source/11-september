@@ -405,14 +405,19 @@ function impulse(ac, secs){
 }
 
 function buildSound(ac, out, t0, vol){
-  const T = s => t0 + s, V = vol * .9;
-  const master = ac.createGain(); master.connect(out);
+  const T = s => t0 + s, V = soundOn() ? vol * .9 : 0;
+  // final mix -> safety limiter -> output (the voice-over arrives near 0 dBFS, so this stops any clipping)
+  const mix = ac.createGain(), lim = ac.createDynamicsCompressor();
+  lim.threshold.value=-3; lim.knee.value=0; lim.ratio.value=20; lim.attack.value=.002; lim.release.value=.12;
+  mix.connect(lim); lim.connect(out);
+  const master = ac.createGain(), duck = ac.createGain(); duck.connect(master); master.connect(mix);
   master.gain.setValueAtTime(0, T(0)); master.gain.linearRampToValueAtTime(V, T(1.6));
   master.gain.setValueAtTime(V, T(TL-1.8)); master.gain.linearRampToValueAtTime(0, T(TL));
   // voice-over pocket + gentle top-end roll-off
   const dip = ac.createBiquadFilter(); dip.type="peaking"; dip.frequency.value=2200; dip.Q.value=.6; dip.gain.value=-9;
   const shelf = ac.createBiquadFilter(); shelf.type="highshelf"; shelf.frequency.value=6000; shelf.gain.value=-6;
-  dip.connect(shelf); shelf.connect(master);
+  dip.connect(shelf); shelf.connect(duck);
+  addVoice(ac, mix, T, duck);
   const bus = dip;
   const verb = ac.createConvolver(); verb.buffer = impulse(ac, 3.2);
   const wet = ac.createGain(); wet.gain.value = .35; verb.connect(wet); wet.connect(bus);
