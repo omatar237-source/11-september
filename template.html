@@ -361,7 +361,6 @@ function drawOverlay(t, cam){
     ctx.restore();
   }
   if (s.k==="h" && s.focus>=0) lowerThird(exhibitLabel(s.focus), names[s.focus], cam.local, s.dur);
-  if (s.k==="h" && s.focus===-3) lowerThird("الروابط بين الأدلة", "صلات محتملة — قيد التحقق", cam.local, s.dur, true);
   const fade = Math.max(clamp(1 - t/1.2), clamp((t-(TL-1.6))/1.6));
   if (fade>0){ ctx.fillStyle=`rgba(0,0,0,${fade})`; ctx.fillRect(0,0,W,H); }
   ctx.fillStyle="#000"; ctx.fillRect(0,0,W,34); ctx.fillRect(0,H-34,W,34);
