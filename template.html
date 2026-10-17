@@ -47,7 +47,7 @@
   <label><span style="width:auto;opacity:.7">المستوى</span><input type="range" id="vol" min="0" max="100" value="60" style="padding:0"></label>
   <div id="voBox">
     <label><input type="checkbox" id="vo" checked style="flex:none"> <span style="width:auto;opacity:.85">التعليق الصوتي <span id="voLen"></span></span></label>
-    <label><span style="width:auto;opacity:.7">يبدأ عند (ثانية)</span><input type="number" id="voStart" min="0" step="0.1" value="1"></label>
+    <label><span style="width:auto;opacity:.7">يبدأ عند (ثانية)</span><input type="number" id="voStart" min="0" step="0.1" value="0.4"></label>
     <label><span style="width:auto;opacity:.7">مستوى الصوت</span><input type="range" id="voVol" min="0" max="100" value="80" style="padding:0"></label>
   </div>
   <div class="row">
@@ -460,8 +460,8 @@ function buildSound(ac, out, t0, vol){
   lim.threshold.value=-3; lim.knee.value=0; lim.ratio.value=20; lim.attack.value=.002; lim.release.value=.12;
   mix.connect(lim); lim.connect(out);
   const master = ac.createGain(), duck = ac.createGain(); duck.connect(master); master.connect(mix);
-  master.gain.setValueAtTime(0, T(0)); master.gain.linearRampToValueAtTime(V, T(1.6));
-  master.gain.setValueAtTime(V, T(TL-1.8)); master.gain.linearRampToValueAtTime(0, T(TL));
+  master.gain.setValueAtTime(0, T(0)); master.gain.linearRampToValueAtTime(V, T(Math.max(.3, TIM.fadeIn*1.3)));
+  master.gain.setValueAtTime(V, T(TL-TIM.fadeOut*1.1)); master.gain.linearRampToValueAtTime(0, T(TL));
   // voice-over pocket + gentle top-end roll-off
   const dip = ac.createBiquadFilter(); dip.type="peaking"; dip.frequency.value=2200; dip.Q.value=.6; dip.gain.value=-9;
   const shelf = ac.createBiquadFilter(); shelf.type="highshelf"; shelf.frequency.value=6000; shelf.gain.value=-6;
@@ -487,7 +487,8 @@ function buildSound(ac, out, t0, vol){
 
   // 3. sparse, low, muffled piano-like notes for the "investigation" mood
   const notes=[110,130.81,98,82.41,146.83,110,123.47,98,82.41,130.81,110,73.42];
-  for (let k=0, s=2.2; s<TL-3; k++, s+=3.6){
+  const short = TL<20;
+  for (let k=0, s=short?.4:2.2; s<TL-(short?1.5:3); k++, s+=short?2.6:3.6){
     const f=notes[k%notes.length], g=ac.createGain(), lp=ac.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=700;
     g.gain.setValueAtTime(0,T(s)); g.gain.linearRampToValueAtTime(.07,T(s+.02)); g.gain.exponentialRampToValueAtTime(.0005,T(s+3.4));
     [[1,"triangle",1],[2,"sine",.25]].forEach(([m,type,a])=>{ const o=ac.createOscillator(), oa=ac.createGain(); o.type=type; o.frequency.value=f*m; oa.gain.value=a;
@@ -525,14 +526,14 @@ function buildSound(ac, out, t0, vol){
     n.connect(hp); hp.connect(g); g.connect(pan); o.connect(og); og.connect(pan); pan.connect(bus);
     n.start(at); n.stop(at+.05); o.start(at); o.stop(at+.06);
   };
-  SEQ.filter(s=>s.k==="h" && s.focus>=0).forEach(s=>{
-    const txt=names[s.focus], n=txt.length, r=rnd(17+s.focus);
-    for (let k=1;k<=n;k++){ if (txt[k-1]===" ") continue; key(T(s.t0+.35+.9*(k-1)/n + (r()-.5)*.012), r, false); }
-    key(T(s.t0+1.3), r, true);                                              // final "return"
+  CAPS.forEach(c=>{
+    const txt=names[c.i], n=txt.length, r=rnd(17+c.i), tw=typeWin(c.t1-c.t0);
+    for (let k=1;k<=n;k++){ if (txt[k-1]===" ") continue; key(T(c.t0+tw.start+tw.len*(k-1)/n + (r()-.5)*.008), r, false); }
+    key(T(c.t0+tw.start+tw.len+.06), r, true);                              // final "return"
   });
 
   // 7. low impacts: under the opening title and the final reveal
-  [[.8,.32],[SEQ.find(s=>s.focus===-2).t0, .26]].forEach(([s,a])=>{
+  [[TIM.titleIn[0],.32],[SEQ.find(s=>s.focus===-2).t0, .26]].forEach(([s,a])=>{
     const at=T(s), o=ac.createOscillator(), g=ac.createGain(); o.type="sine";
     o.frequency.setValueAtTime(70,at); o.frequency.exponentialRampToValueAtTime(32,at+1.8);
     g.gain.setValueAtTime(0,at); g.gain.linearRampToValueAtTime(a,at+.02); g.gain.exponentialRampToValueAtTime(.0005,at+2.6);
@@ -656,7 +657,7 @@ async function exportStills(){
 
 // ---------- UI ----------
 function rebuild(){ assignSlots(); PRINTS=PHOTOS.map(p=>makePrint(IM[p.img], p.h)); TAGS=PHOTOS.map((_,i)=>makeTag(i)); TITLECARD=makeTitleCard(); buildTimeline(); window.__TL=TL; window.__SHOTS=SHOTS; }
-function previewFocus(i){ const s=SEQ.find(s=>s.focus===i); render(s ? s.t0+1.8 : TL-2.5); }
+function previewFocus(i){ const c=CAPS.find(c=>c.i===i); render(c ? c.t0+(c.t1-c.t0)*.8 : TL-2.5); }
 
 function buildUI(){
   const box=document.getElementById("names"), ti=document.getElementById("title");
@@ -673,6 +674,8 @@ function buildUI(){
   document.getElementById("rec").onclick=record;
   document.getElementById("stills").onclick=exportStills;
   document.getElementById("wav").onclick=exportWav;
+  const retime=()=>{ buildTimeline(); window.__TL=TL; window.__SHOTS=SHOTS; if(!playing) render(TL-.8); status("مدة الفيديو: "+TL.toFixed(1)+" ثانية"); };
+  document.getElementById("vo").onchange=retime; document.getElementById("voStart").oninput=retime;
   document.getElementById("hide").onclick=()=>document.body.classList.add("hidden");
   document.getElementById("show").onclick=()=>document.body.classList.remove("hidden");
   addEventListener("keydown",e=>{ if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT") return;
