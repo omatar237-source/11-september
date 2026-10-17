@@ -56,7 +56,7 @@
   </div>
   <div class="row">
     <button id="stills">⬇ تصدير اللقطات PNG</button>
-    <button id="wav">⬇ الصوت وحده WAV</button>
+    <button id="wav">⬇ الصوت كاملاً WAV</button>
   </div>
   <div class="row">
     <button id="hide">إخفاء (H)</button>
@@ -489,7 +489,46 @@ function buildSound(ac, out, t0, vol){
     g.gain.setValueAtTime(0,at); g.gain.linearRampToValueAtTime(a,at+.02); g.gain.exponentialRampToValueAtTime(.0005,at+2.6);
     o.connect(g); g.connect(bus); g.connect(verb); o.start(at); o.stop(at+2.7);
   });
-  return master;
+  return mix;
+}
+
+// ---------- voice-over ----------
+let VOBUF = null;
+const voOn = () => !!VOBUF && document.getElementById("vo").checked;
+const voStart = () => Math.max(0, +document.getElementById("voStart").value || 0);
+const voVol = () => document.getElementById("voVol").value / 100;
+const anySound = () => soundOn() || voOn();
+
+function addVoice(ac, mix, T, duck){
+  duck.gain.setValueAtTime(1, T(0));
+  if (!voOn()) return;
+  const s0 = voStart();
+  const src = ac.createBufferSource(); src.buffer = VOBUF;
+  // light speech chain: cut rumble, even out the level, then set the voice level
+  const hp = ac.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=80;
+  const comp = ac.createDynamicsCompressor(); comp.threshold.value=-20; comp.knee.value=8; comp.ratio.value=3; comp.attack.value=.005; comp.release.value=.2;
+  const g = ac.createGain(); g.gain.value = .9 * voVol();
+  src.connect(hp); hp.connect(comp); comp.connect(g); g.connect(mix);
+  src.start(T(s0));
+  // ducking: lower the music bed by ~9 dB while the voice is speaking, ease back in the pauses
+  const d = VOBUF.getChannelData(0), sr = VOBUF.sampleRate, win = Math.round(sr*.05);
+  let active = false, quiet = 0;
+  for (let i=0, w=0; i<d.length; i+=win, w++){
+    let e=0; for (let j=i; j<Math.min(i+win,d.length); j++) e+=d[j]*d[j];
+    const loud = 10*Math.log10(e/win + 1e-12) > -38, at = T(s0 + w*.05);
+    if (loud){ quiet = 0; if (!active){ active = true; duck.gain.setTargetAtTime(.35, Math.max(T(0), at-.12), .06); } }
+    else if (active && ++quiet >= 8){ active = false; duck.gain.setTargetAtTime(1, at, .35); }
+  }
+  if (active) duck.gain.setTargetAtTime(1, T(s0 + VOBUF.duration), .35);
+}
+
+async function loadVoice(){
+  if (!VO_SRC){ document.getElementById("voBox").style.display = "none"; return; }
+  try {
+    const ab = await (await fetch(VO_SRC)).arrayBuffer();
+    VOBUF = await new OfflineAudioContext(2, 48000, 48000).decodeAudioData(ab);
+    document.getElementById("voLen").textContent = "(" + VOBUF.duration.toFixed(1) + " ث)";
+  } catch(e){ document.getElementById("voBox").style.display = "none"; status("تعذّر تحميل التعليق الصوتي"); }
 }
 
 let AC=null, ACdest=null, curMaster=null;
@@ -498,7 +537,7 @@ function startAudio(){
   AC.resume();
   if (curMaster){ const m=curMaster; m.gain.cancelScheduledValues(AC.currentTime); m.gain.setTargetAtTime(0,AC.currentTime,.05); setTimeout(()=>m.disconnect(),400); curMaster=null; }
   const t0 = AC.currentTime + .15;
-  if (soundOn()){ const out=AC.createGain(); out.connect(AC.destination); out.connect(ACdest); curMaster=buildSound(AC, out, t0, soundVol()); }
+  if (anySound()){ const out=AC.createGain(); out.connect(AC.destination); out.connect(ACdest); curMaster=buildSound(AC, out, t0, soundVol()); }
   return t0;
 }
 
@@ -543,7 +582,7 @@ function record(){
   const type=types.find(t=>window.MediaRecorder && MediaRecorder.isTypeSupported(t));
   if (!type){ status("المتصفح لا يدعم التسجيل. استخدم Chrome أو Edge."); return; }
   if (!AC){ AC=new (window.AudioContext||window.webkitAudioContext)(); ACdest=AC.createMediaStreamDestination(); }
-  const chunks=[], stream=new MediaStream([...cv.captureStream(30).getVideoTracks(), ...(soundOn() ? ACdest.stream.getAudioTracks() : [])]);
+  const chunks=[], stream=new MediaStream([...cv.captureStream(30).getVideoTracks(), ...(anySound() ? ACdest.stream.getAudioTracks() : [])]);
   recorder=new MediaRecorder(stream,{ mimeType:type, videoBitsPerSecond:14e6 });
   recorder.ondataavailable=e=>e.data.size&&chunks.push(e.data);
   recorder.onstop=()=>{
@@ -596,6 +635,7 @@ function buildUI(){
   const fontsReady = Promise.all(["700 30px Cairo","900 30px Cairo","400 16px Cairo","700 30px 'Reem Kufi'","700 30px 'Aref Ruqaa'"].map(f=>document.fonts.load(f)));
   await Promise.race([fontsReady, new Promise(r=>setTimeout(r,2500))]);
   for (const k of Object.keys(SRC)) IM[k]=await loadImg(SRC[k]);
+  await loadVoice();
   STATIC=buildStatic(); makeNoise(); rebuild(); buildUI();
   render(TL-2.5);
   window.__render=render;
