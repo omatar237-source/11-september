@@ -676,7 +676,7 @@ function loop(){
 function play(){ start=startAudio(); playing=true; requestAnimationFrame(loop); }
 function finish(){ playing=false; if (recorder && recorder.state==="recording") recorder.stop(); }
 const status = m => document.getElementById("status").textContent = m;
-function setBusy(b){ ["play","rec","stills","wav"].forEach(id=>document.getElementById(id).disabled=b); }
+function setBusy(b){ ["play","rec","stills","wav","mp4"].forEach(id=>document.getElementById(id).disabled=b); }
 function download(blob, name){ const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 4000); }
 
 function record(){
@@ -694,6 +694,61 @@ function record(){
   document.body.classList.add("recording","hidden"); setBusy(true);
   status("جارٍ التسجيل… أبقِ هذه النافذة ظاهرة ("+Math.round(TL)+" ثانية)");
   recorder.start(250); play();
+}
+
+// ---------- frame-accurate MP4 export (WebCodecs H.264 + AAC, muxed with mp4-muxer) ----------
+// Renders every frame at its exact time instead of recording in real time, so nothing can stutter.
+function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement("script"); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
+
+async function saveToFolder(blob, name){
+  // when served by serve.ps1 (localhost) the file is written straight into the project's output\ folder
+  if (!/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return false;
+  try { const r = await fetch("/save/" + encodeURIComponent(name), { method:"POST", body:blob }); return r.ok; } catch(e){ return false; }
+}
+
+async function exportMp4(){
+  setBusy(true);
+  try {
+    if (!window.Mp4Muxer) await loadScript("https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.min.js");
+    const fps = 30, frames = Math.ceil(TL*fps), withAudio = anySound();
+    const muxer = new Mp4Muxer.Muxer({ target:new Mp4Muxer.ArrayBufferTarget(), fastStart:"in-memory",
+      video:{ codec:"avc", width:W, height:H, frameRate:fps },
+      ...(withAudio ? { audio:{ codec:"aac", numberOfChannels:2, sampleRate:48000 } } : {}) });
+    let err = null;
+    const venc = new VideoEncoder({ output:(c,m)=>muxer.addVideoChunk(c,m), error:e=>err=e });
+    venc.configure({ codec:"avc1.640028", width:W, height:H, bitrate:14e6, framerate:fps });
+    for (let i=0;i<frames;i++){
+      if (err) throw err;
+      render(Math.min(i/fps, TL));
+      const f = new VideoFrame(cv, { timestamp:Math.round(i*1e6/fps), duration:Math.round(1e6/fps) });
+      venc.encode(f, { keyFrame: i%fps===0 }); f.close();
+      while (venc.encodeQueueSize > 6) await new Promise(r=>setTimeout(r,2));
+      if (i%15===0){ status(`جارٍ إنشاء الفيديو… ${Math.round(100*i/frames)}٪`); await new Promise(r=>setTimeout(r,0)); }
+    }
+    await venc.flush();
+    if (withAudio){
+      status("جارٍ إضافة الصوت…");
+      const buf = await renderSoundtrack(), n = Math.min(buf.length, Math.round(TL*48000));
+      const aenc = new AudioEncoder({ output:(c,m)=>muxer.addAudioChunk(c,m), error:e=>err=e });
+      aenc.configure({ codec:"mp4a.40.2", sampleRate:48000, numberOfChannels:2, bitrate:192000 });
+      const L = buf.getChannelData(0), R = buf.getChannelData(1);
+      for (let s=0; s<n; s+=1024){
+        const len = Math.min(1024, n-s), data = new Float32Array(len*2);
+        data.set(L.subarray(s,s+len),0); data.set(R.subarray(s,s+len),len);
+        const ad = new AudioData({ format:"f32-planar", sampleRate:48000, numberOfFrames:len, numberOfChannels:2, timestamp:Math.round(s*1e6/48000), data });
+        aenc.encode(ad); ad.close();
+      }
+      await aenc.flush();
+      if (err) throw err;
+    }
+    muxer.finalize();
+    const blob = new Blob([muxer.target.buffer], { type:"video/mp4" }), name = "detective-board.mp4";
+    const saved = await saveToFolder(blob, name);
+    if (!saved) download(blob, name);
+    status((saved ? "تم الحفظ في مجلد المشروع: output\\" : "تم التنزيل: ") + name + " (" + (blob.size/1e6).toFixed(1) + " MB) ✓");
+    window.__lastExport = { saved, size:blob.size, frames, withAudio };
+  } catch(e){ status("تعذّر إنشاء الفيديو: " + e.message); window.__lastExport = { error:String(e) }; }
+  render(TL-.8); setBusy(false);
 }
 
 async function exportStills(){
@@ -726,6 +781,7 @@ function buildUI(){
   document.getElementById("rec").onclick=record;
   document.getElementById("stills").onclick=exportStills;
   document.getElementById("wav").onclick=exportWav;
+  document.getElementById("mp4").onclick=exportMp4;
   const retime=()=>{ buildTimeline(); window.__TL=TL; window.__SHOTS=SHOTS; if(!playing) render(TL-.8); status("مدة الفيديو: "+TL.toFixed(1)+" ثانية"); };
   document.getElementById("vo").onchange=retime; document.getElementById("voStart").oninput=retime;
   const rate=document.getElementById("voRate");
