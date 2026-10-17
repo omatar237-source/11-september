@@ -266,7 +266,7 @@ function buildTimeline(){
   // voice-over: every camera move lands on a person just as their phrase starts
   const o = voStart(), starts = cue.cuts.map(c => o + c), speechEnd = o + cue.end;
   const md = k => k===0 ? .8 : .55;                                       // move durations
-  const moveAt = starts.map((s,k) => s - md(k)*.6);
+  const moveAt = starts.map((s,k) => s - md(k)*.9);
   const intro = Math.max(.9, moveAt[0]);
   TIM = { fadeIn:Math.min(.35, intro*.3), titleIn:[intro*.1, intro*.3], titleOut:[intro*.75, intro*.97], fadeOut:1.0,
           typeStart:.05, typeDur:null, capFade:.12, dip:.2, radial:null };
