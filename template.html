@@ -218,28 +218,73 @@ function makeNoise(){
 
 // ---------- camera timeline ----------
 const WIDE = { x:960, y:540, z:.96 };
-let SEQ = [], TL = 0, SHOTS = [], LINKS = [];
+let SEQ = [], TL = 0, SHOTS = [], LINKS = [], CAPS = [], TIM = {};
+
+// Splits the voice-over into its phrases: the 5 longest pauses become the cut points, so
+// phrase 0 is the intro and phrases 1..5 are the five people in VISIT order.
+function voCues(){
+  if (!voOn()) return null;
+  const d = VOBUF.getChannelData(0), sr = VOBUF.sampleRate, w = Math.round(sr*.02), e = [];
+  for (let i=0;i<d.length;i+=w){ let s=0; for (let j=i;j<Math.min(i+w,d.length);j++) s+=d[j]*d[j]; e.push(10*Math.log10(s/w+1e-12)); }
+  const sm = e.map((_,i)=>{ let s=0,n=0; for (let k=i-2;k<=i+2;k++) if (e[k]!==undefined){ s+=e[k]; n++; } return s/n; });
+  const thr = -34, first = Math.max(0, sm.findIndex(v=>v>thr))*.02;
+  let lastI = sm.length-1; while (lastI>0 && sm[lastI]<=thr) lastI--;
+  const end = (lastI+1)*.02, gaps = []; let st = null;
+  sm.forEach((v,i)=>{ if (v<=thr){ if (st===null) st=i; } else if (st!==null){ if (i-st>=3) gaps.push({ a:st*.02, b:i*.02 }); st=null; } });
+  let cuts = gaps.filter(g=>g.a>first && g.b<end).sort((x,y)=>(y.b-y.a)-(x.b-x.a)).slice(0,5).map(g=>g.b).sort((x,y)=>x-y);
+  if (cuts.length<5) cuts = [1,2,3,4,5].map(k=>first+(end-first)*k/6);   // no clear pauses: split evenly
+  return { first, end, cuts };
+}
+
 function buildTimeline(){
-  SEQ = []; TL = 0; SHOTS = []; LINKS = [];
+  SEQ = []; TL = 0; SHOTS = []; LINKS = []; CAPS = [];
   let cur = { ...WIDE };
   const hold = (dur, push, focus, label, dz) => { const a={...cur}, b={...cur, z:cur.z+push, ...(dz||{})};
     SEQ.push({k:"h", a, b, dur, focus, t0:TL}); if (label) SHOTS.push({ label, t:TL+dur*.7 }); TL+=dur; cur=b; };
   const move = (to, dur) => { SEQ.push({k:"m", a:{...cur}, b:{...to}, dur, t0:TL}); TL+=dur; cur={...to}; };
   const close = i => ({ x:PHOTOS[i].x, y:PHOTOS[i].y+44, z:2.0 });
+  const cue = voCues();
 
-  hold(4.6, .06, -1, "00-wide");                                          // wide establishing, no strings yet
+  if (!cue){
+    // no voice-over: the slow 41-second version
+    TIM = { fadeIn:1.2, titleIn:[.8,1.8], titleOut:[3.6,4.4], fadeOut:1.6, typeStart:.35, typeDur:.9, capFade:.35, dip:.45, radial:[1.4,.45,1.5] };
+    hold(4.6, .06, -1, "00-wide");
+    VISIT.forEach((i,k) => {
+      const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = k===0 ? 3.0 : 2.2;
+      LINKS.push({ a:from, b:i, start:TL, dur, follow:true });
+      move(last ? { ...close(i), z:1.85 } : close(i), dur);
+      const hd = last ? 4.6 : 3.2;
+      if (last) VISIT.slice(0,-2).concat("hub").forEach((j,m) => LINKS.push({ a:i, b:j, start:TL+TIM.radial[0]+m*TIM.radial[1], dur:TIM.radial[2] }));
+      CAPS.push({ i, t0:TL, t1:TL+hd });
+      hold(hd, last ? .1 : .12, i, "0" + num(i) + "-person");
+    });
+    move({ x:960, y:520, z:1.04 }, 3.0);
+    hold(4.4, -.08, -2, "06-final", { y:540 });
+    return;
+  }
+
+  // voice-over: every camera move lands on a person just as their phrase starts
+  const o = voStart(), starts = cue.cuts.map(c => o + c), speechEnd = o + cue.end;
+  const md = k => k===0 ? .8 : .55;                                       // move durations
+  const moveAt = starts.map((s,k) => s - md(k)*.6);
+  const intro = Math.max(.9, moveAt[0]);
+  TIM = { fadeIn:Math.min(.35, intro*.3), titleIn:[intro*.1, intro*.3], titleOut:[intro*.75, intro*.97], fadeOut:1.0,
+          typeStart:.05, typeDur:null, capFade:.12, dip:.2, radial:null };
+  hold(intro, .05, -1, "00-wide");
   VISIT.forEach((i,k) => {
-    const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = k===0 ? 3.0 : 2.2;
-    // the string unrolls from the previous person to this one as the camera travels along it
+    const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = md(k);
     LINKS.push({ a:from, b:i, start:TL, dur, follow:true });
     move(last ? { ...close(i), z:1.85 } : close(i), dur);
-    if (last){                                                            // #5 (centre): ties back to everyone else
-      VISIT.slice(0,-2).concat("hub").forEach((j,m) => LINKS.push({ a:i, b:j, start:TL+1.4+m*.45, dur:1.5 }));
-      hold(4.6, .1, i, "0" + num(i) + "-person");
-    } else hold(3.2, .12, i, "0" + num(i) + "-person");
+    const hd = last ? Math.max(1.4, speechEnd + .25 - TL) : Math.max(.3, moveAt[k+1] - TL);
+    if (last){                                                            // radial strings while #5 is spoken about
+      const n = VISIT.length-1, step = hd*.55/n;
+      VISIT.slice(0,-2).concat("hub").forEach((j,m) => LINKS.push({ a:i, b:j, start:TL+hd*.12+m*step, dur:Math.max(.35, step*1.6) }));
+    }
+    CAPS.push({ i, t0:TL, t1: last ? TL+hd : moveAt[k+1] + md(k+1) });   // caption stays up through the next move
+    hold(hd, last ? .08 : .06, i, "0" + num(i) + "-person");
   });
-  move({ x:960, y:520, z:1.04 }, 3.0);                                    // pull back: the whole web
-  hold(4.4, -.08, -2, "06-final", { y:540 });                              // dramatic full board + fade
+  move({ x:960, y:520, z:1.04 }, .9);
+  hold(1.6, -.05, -2, "06-final", { y:540 });
 }
 
 function camAt(t){
@@ -248,7 +293,7 @@ function camAt(t){
   let x,y,z;
   if (s.k==="h"){ const e=s.focus===-2?ease(p):easeOut(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e); z=lerp(s.a.z,s.b.z,e); }
   else { const e=ease(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e);
-         z=lerp(s.a.z,s.b.z,e); if (s.a.z>1.5 && s.b.z>1.5) z -= .45*Math.sin(Math.PI*e); }
+         z=lerp(s.a.z,s.b.z,e); if (s.a.z>1.5 && s.b.z>1.5) z -= TIM.dip*Math.sin(Math.PI*e); }
   x += Math.sin(t*.63)*5 + Math.sin(t*1.7)*2; y += Math.cos(t*.51)*4 + Math.sin(t*2.1)*1.5;
   let rot = (Math.sin(t*.37)*.25 + Math.sin(t*.9)*.08) * Math.PI/180;
   if (s.focus===-2) rot += -.9*ease(p)*Math.PI/180;          // slight dutch tilt on the final shot
@@ -348,10 +393,13 @@ function drawLight(t, cam){
   ctx.globalAlpha=1; ctx.globalCompositeOperation="source-over";
 }
 
+// typing window for a caption that is up for `dur` seconds (shared by the picture and the key sounds)
+const typeWin = dur => ({ start:TIM.typeStart, len: TIM.typeDur || Math.min(.6, dur*.4) });
+
 function lowerThird(kicker, text, L, dur, top=false){
-  const a=clamp((L-.15)/.35)*clamp((dur-L)/.35);
+  const f=TIM.capFade, a=clamp((L-f*.4)/f)*clamp((dur-L)/f);
   if (a<=0) return;
-  const shown = text.slice(0, Math.ceil(text.length*clamp((L-.35)/.9)));
+  const tw = typeWin(dur), shown = text.slice(0, Math.ceil(text.length*clamp((L-tw.start)/tw.len)));
   ctx.save(); ctx.globalAlpha=a;
   const x=W-110, y=top ? 150 : H-150;
   const lg=ctx.createLinearGradient(W,0,W-820,0); lg.addColorStop(0,"rgba(0,0,0,.9)"); lg.addColorStop(.6,"rgba(0,0,0,.7)"); lg.addColorStop(1,"rgba(0,0,0,0)");
@@ -365,7 +413,7 @@ function lowerThird(kicker, text, L, dur, top=false){
 function drawOverlay(t, cam){
   ctx.setTransform(1,0,0,1,0,0); ctx.direction="rtl";
   const s = cam.seg;
-  const ta = clamp((t-.8)/1)*clamp((4.4-t)/.8);
+  const ti=TIM.titleIn, to=TIM.titleOut, ta = clamp((t-ti[0])/(ti[1]-ti[0]))*clamp((to[1]-t)/(to[1]-to[0]));
   if (ta>0){
     ctx.fillStyle=`rgba(0,0,0,${.55*ta})`; ctx.fillRect(0,0,W,H);
     ctx.save(); ctx.globalAlpha=ta; ctx.textAlign="center"; ctx.shadowColor="rgba(0,0,0,.9)"; ctx.shadowBlur=30;
@@ -373,8 +421,9 @@ function drawOverlay(t, cam){
     ctx.fillStyle="#b8343a"; ctx.font="700 26px Cairo"; ctx.fillText("لوحة التحقيق", W/2, H/2+62);
     ctx.restore();
   }
-  if (s.k==="h" && s.focus>=0) lowerThird(exhibitLabel(s.focus), names[s.focus], cam.local, s.dur);
-  const fade = Math.max(clamp(1 - t/1.2), clamp((t-(TL-1.6))/1.6));
+  const cap = CAPS.find(c => t>=c.t0 && t<c.t1);
+  if (cap) lowerThird(exhibitLabel(cap.i), names[cap.i], t-cap.t0, cap.t1-cap.t0);
+  const fade = Math.max(clamp(1 - t/TIM.fadeIn), clamp((t-(TL-TIM.fadeOut))/TIM.fadeOut));
   if (fade>0){ ctx.fillStyle=`rgba(0,0,0,${fade})`; ctx.fillRect(0,0,W,H); }
   ctx.fillStyle="#000"; ctx.fillRect(0,0,W,34); ctx.fillRect(0,H-34,W,34);
 }
