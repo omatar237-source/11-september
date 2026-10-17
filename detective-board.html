@@ -119,6 +119,9 @@ const lerp = (a,b,t) => a + (b-a)*t;
 const ease = t => t<.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
 const easeOut = t => 1 - Math.pow(1-t,3);
 const easeSine = t => (1 - Math.cos(Math.PI*t))/2;           // gentlest in-out: lowest peak speed, no jerk at the ends
+// snap: visibly moving within a frame or two of the start, then a long gentle glide in (cubic-bezier(.2,.3,.15,1))
+const easeSnap = p => { let lo=0, hi=1; for (let i=0;i<24;i++){ const t=(lo+hi)/2, x=3*(1-t)*(1-t)*t*.2+3*(1-t)*t*t*.15+t*t*t; if (x<p) lo=t; else hi=t; }
+  const t=(lo+hi)/2; return 3*(1-t)*(1-t)*t*.3+3*(1-t)*t*t+t*t*t; };
 function mk(w,h){ const c=document.createElement("canvas"); c.width=Math.ceil(w); c.height=Math.ceil(h); return c; }
 function rnd(seed){ let s=seed; return () => (s = (s*16807) % 2147483647) / 2147483647; }
 function loadImg(src){ return new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=src; }); }
@@ -248,7 +251,7 @@ function buildTimeline(){
   let cur = { ...WIDE };
   const hold = (dur, push, focus, label, dz) => { const a={...cur}, b={...cur, z:cur.z+push, ...(dz||{})};
     SEQ.push({k:"h", a, b, dur, focus, t0:TL}); if (label) SHOTS.push({ label, t:TL+dur*.7 }); TL+=dur; cur=b; };
-  const move = (to, dur, quick) => { SEQ.push({k:"m", a:{...cur}, b:{...to}, dur, t0:TL, quick}); TL+=dur; cur={...to}; };
+  const move = (to, dur, quick, snap) => { SEQ.push({k:"m", a:{...cur}, b:{...to}, dur, t0:TL, quick, snap}); TL+=dur; cur={...to}; };
   const close = i => ({ x:PHOTOS[i].x, y:PHOTOS[i].y+44, z:2.0 });
   const cue = voCues();
 
@@ -275,14 +278,15 @@ function buildTimeline(){
   const o = voStart(), starts = cue.cuts.map(c => o + c), speechEnd = o + cue.end;
   // each move uses most of the time until the next name (up to ~1 s) so it can ease gently in and out
   const md = k => Math.min(k===0 ? 1.0 : .9, ((k<starts.length-1 ? starts[k+1] : starts[k]+2) - starts[k]) * .8);
+  const lead = .05;                                                        // the pause detector marks a name ~1–3 frames late
   TIM = { fadeIn:.35, titleIn:[0, .25], titleOut:[Math.max(.5, starts[0]-.7), Math.max(.8, starts[0]-.3)], fadeOut:1.0,
           typeStart:0, typeDur:null, typeMax:.28, capFade:.06, dip:.08, dipByDist:true, holdSine:true, radial:null };
-  hold(starts[0], .01, -1, "00-wide");
+  hold(starts[0]-lead, .01, -1, "00-wide");
   VISIT.forEach((i,k) => {
     const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = md(k), t0 = TL;
-    LINKS.push({ a:from, b:i, start:TL, dur, follow:true });
-    move(last ? { ...close(i), z:1.85 } : close(i), dur);
-    const hd = last ? Math.max(1.4, speechEnd + .25 - TL) : Math.max(.2, starts[k+1] - TL);
+    LINKS.push({ a:from, b:i, start:TL, dur, follow:true, snap:true });
+    move(last ? { ...close(i), z:1.85 } : close(i), dur, false, true);
+    const hd = last ? Math.max(1.4, speechEnd + .25 - TL) : Math.max(.2, starts[k+1] - lead - TL);
     if (last){                                                            // radial strings while #5 is spoken about
       const n = VISIT.length-1, step = hd*.55/n;
       VISIT.slice(0,-2).concat("hub").forEach((j,m) => LINKS.push({ a:i, b:j, start:TL+hd*.12+m*step, dur:Math.max(.35, step*1.6) }));
@@ -300,7 +304,7 @@ function camAt(t){
   const p = clamp((t-s.t0)/s.dur);
   let x,y,z;
   if (s.k==="h"){ const e=s.focus===-2?ease(p):(TIM.holdSine?easeSine(p):easeOut(p)); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e); z=lerp(s.a.z,s.b.z,e); }
-  else { const e=s.quick ? easeOut(p) : easeSine(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e);
+  else { const e=s.snap ? easeSnap(p) : s.quick ? easeOut(p) : easeSine(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e);
          z=lerp(s.a.z,s.b.z,e);
          if (s.a.z>1.5 && s.b.z>1.5){   // ease out a little mid-move (more for longer moves) so the pan never whips
            const dip = TIM.dipByDist ? Math.min(.45, Math.hypot(s.b.x-s.a.x, s.b.y-s.a.y)/2200) : TIM.dip;
@@ -343,7 +347,7 @@ function drawPin(x,y,glow){
 function stringProgress(t){
   return LINKS.map(l => {
     const p = clamp((t-l.start)/l.dur);
-    return { ...l, to:l.b, p: l.follow && !l.quick ? easeSine(p) : easeOut(p), done: t-l.start-l.dur };
+    return { ...l, to:l.b, p: l.snap ? easeSnap(p) : l.follow && !l.quick ? easeSine(p) : easeOut(p), done: t-l.start-l.dur };
   });
 }
 
