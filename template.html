@@ -88,7 +88,7 @@ const save = () => { try { localStorage.setItem("board-v2", JSON.stringify({ nam
 let PHOTOS = [];
 function assignSlots(){
   const others = [0,1,2,3,4].filter(i => i!==mainIdx);
-  PHOTOS = [0,1,2,3,4].map(i => ({ img:i+1, ...SLOTS[i===mainIdx ? 0 : 1 + others.indexOf(i)] }));
+  PHOTOS = [0,1,2,3,4].map(i => { const slot = i===mainIdx ? 0 : 1 + others.indexOf(i); return { img:i+1, slot, ...SLOTS[slot] }; });
 }
 
 // ---------- helpers ----------
@@ -221,9 +221,8 @@ function buildTimeline(){
 
   hold(4.6, .06, -1, "01-wide");                                          // 1. wide establishing
   move({ ...close(mainIdx), z:1.9 }, 3.4); hold(3.8, .2, mainIdx, "02-main"); // 2. slow zoom to main evidence
-  const others = [0,1,2,3,4].filter(i=>i!==mainIdx)
-    .sort((a,b)=>SLOTS.indexOf(SLOTS.find(s=>s.x===PHOTOS[a].x&&s.y===PHOTOS[a].y)) - SLOTS.indexOf(SLOTS.find(s=>s.x===PHOTOS[b].x&&s.y===PHOTOS[b].y)));
-  others.forEach((i,k) => { move(close(i), 2.0); hold(3.0, .12, i, "03-evidence-" + AR(i+1).replace(/[٠-٩]/g,d=>"٠١٢٣٤٥٦٧٨٩".indexOf(d))); });
+  const others = [0,1,2,3,4].filter(i=>i!==mainIdx).sort((a,b)=>PHOTOS[a].slot-PHOTOS[b].slot);
+  others.forEach(i => { move(close(i), 2.0); hold(3.0, .12, i, "03-evidence-" + (i+1)); });   // 3. each piece of evidence
   move({ x:960, y:500, z:1.14 }, 2.6);                                    // 4. reveal connections
   REVEAL = TL; hold(7.0, -.04, -3, "04-connections");
   hold(4.6, -.16, -2, "05-final", { y:540 });                              // 5. dramatic full board
