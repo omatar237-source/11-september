@@ -273,7 +273,7 @@ function buildTimeline(){
   const md = k => k===0 ? Math.max(.8, starts[0] - .05 - intro) : .6;      // every picture-to-picture move takes the same time
   const moveAt = starts.map((s,k) => k===0 ? intro : s - md(k)*.9);
   TIM = { fadeIn:Math.min(.35, Math.max(.15, intro)), titleIn:[0, .25], titleOut:[intro+.5, intro+.9], fadeOut:1.0,
-          typeStart:0, typeDur:null, typeMax:.28, capFade:.06, capLead:.15, dip:.08, radial:null };
+          typeStart:0, typeDur:null, typeMax:.28, capFade:.06, capLead:.15, dip:.08, dipByDist:true, radial:null };
   hold(intro, .01, -1, "00-wide");
   VISIT.forEach((i,k) => {
     const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = md(k);
@@ -298,7 +298,10 @@ function camAt(t){
   let x,y,z;
   if (s.k==="h"){ const e=s.focus===-2?ease(p):easeOut(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e); z=lerp(s.a.z,s.b.z,e); }
   else { const e=s.quick ? easeOut(p) : easeSine(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e);
-         z=lerp(s.a.z,s.b.z,e); if (s.a.z>1.5 && s.b.z>1.5) z -= TIM.dip*Math.sin(Math.PI*e); }
+         z=lerp(s.a.z,s.b.z,e);
+         if (s.a.z>1.5 && s.b.z>1.5){   // ease out a little mid-move (more for longer moves) so the pan never whips
+           const dip = TIM.dipByDist ? Math.min(.85, Math.hypot(s.b.x-s.a.x, s.b.y-s.a.y)/1250) : TIM.dip;
+           z -= dip*Math.sin(Math.PI*e); } }
   x += Math.sin(t*.63)*5 + Math.sin(t*1.7)*2; y += Math.cos(t*.51)*4 + Math.sin(t*2.1)*1.5;
   let rot = (Math.sin(t*.37)*.25 + Math.sin(t*.9)*.08) * Math.PI/180;
   if (s.focus===-2) rot += -.9*ease(p)*Math.PI/180;          // slight dutch tilt on the final shot
