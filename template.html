@@ -40,10 +40,8 @@
   <p>الصور الخمس هي المادة الوحيدة على اللوحة. الأسماء وعنوان القضية تكتبها أنت؛ لا يُضاف أي اسم أو تاريخ أو رابط غير مؤكد.</p>
   <h3>عنوان القضية</h3>
   <label><input id="title" placeholder="ملف القضية"></label>
-  <h3>الأسماء (بترتيب الصور المرسلة)</h3>
+  <h3>الأسماء (بترتيب الظهور في الفيديو)</h3>
   <div id="names"></div>
-  <h3>الدليل الرئيسي (محور اللوحة)</h3>
-  <label><select id="main"></select></label>
   <div class="row">
     <button id="play" class="primary">▶ تشغيل</button>
     <button id="rec">⏺ تسجيل الفيديو</button>
@@ -77,17 +75,23 @@ const SLOTS = [
 const HUB = { x:960, y:116 };                 // pin on the case-title card
 const LEGEND = { x:960, y:858 };
 
-let names = DEFAULT_NAMES.slice(), caseTitle = DEFAULT_TITLE, mainIdx = 0;
+// photo index = order the files were sent (images/1..5). VISIT = order they appear in the video:
+// #1 = file 2, #2 = file 3, #3 = file 4, #4 = file 5, #5 = file 1 (centre photo, shown last)
+const VISIT = [1,2,3,4,0];
+const num = i => VISIT.indexOf(i) + 1;
+const mainIdx = VISIT[VISIT.length-1];
+
+let names = DEFAULT_NAMES.slice(), caseTitle = DEFAULT_TITLE;
 try {
-  const s = JSON.parse(localStorage.getItem("board-v2") || "null");
-  if (s) { if (Array.isArray(s.names) && s.names.length===5) names = s.names; caseTitle = s.title || DEFAULT_TITLE; mainIdx = +s.main || 0; }
+  const s = JSON.parse(localStorage.getItem("board-v3") || "null");
+  if (s) { if (Array.isArray(s.names) && s.names.length===5) names = s.names; caseTitle = s.title || DEFAULT_TITLE; }
 } catch(e) {}
-const save = () => { try { localStorage.setItem("board-v2", JSON.stringify({ names, title:caseTitle, main:mainIdx })); } catch(e) {} };
+const save = () => { try { localStorage.setItem("board-v3", JSON.stringify({ names, title:caseTitle })); } catch(e) {} };
 
 // photo i (0..4, order sent) -> slot
 let PHOTOS = [];
 function assignSlots(){
-  const others = [0,1,2,3,4].filter(i => i!==mainIdx);
+  const others = VISIT.filter(i => i!==mainIdx);
   PHOTOS = [0,1,2,3,4].map(i => { const slot = i===mainIdx ? 0 : 1 + others.indexOf(i); return { img:i+1, slot, ...SLOTS[slot] }; });
 }
 
@@ -126,17 +130,14 @@ function buildStatic(){
   edge(BOARD.x+BOARD.w,0,BOARD.x+BOARD.w-40,0, BOARD.x+BOARD.w-40,BOARD.y,40,BOARD.h);
   for (let i=0;i<60;i++){ g.fillStyle="rgba(20,10,4,.6)"; g.beginPath(); g.arc(BOARD.x+30+r()*(BOARD.w-60), BOARD.y+30+r()*(BOARD.h-60), 1.4, 0, 7); g.fill(); }
 
-  // legend index card: explains what the two kinds of string mean
-  paper(g, LEGEND.x, LEGEND.y, 360, 128, .8, "#e9e1cf", (g,w,h)=>{
+  // legend index card: what the red string means
+  paper(g, LEGEND.x, LEGEND.y, 330, 100, .8, "#e9e1cf", (g,w,h)=>{
     g.strokeStyle="rgba(150,40,40,.35)"; g.lineWidth=1; g.beginPath(); g.moveTo(-w/2,-h/2+34); g.lineTo(w/2,-h/2+34); g.stroke();
     g.strokeStyle="rgba(60,90,140,.18)"; for (let y=-h/2+58; y<h/2; y+=26){ g.beginPath(); g.moveTo(-w/2,y); g.lineTo(w/2,y); g.stroke(); }
     g.direction="rtl"; g.textAlign="right"; g.fillStyle="#3a2a1a"; g.font="700 17px Cairo"; g.fillText("مفتاح اللوحة", w/2-16, -h/2+25);
-    g.font="400 17px Cairo";
-    g.fillText("ضمن ملف القضية", w/2-96, -h/2+70);
-    g.fillText("صلة محتملة — لم تُؤكَّد", w/2-96, -h/2+102);
+    g.font="400 17px Cairo"; g.fillText("صلة بين الأدلة", w/2-96, -h/2+72);
     g.lineCap="round"; g.strokeStyle="#9e1218"; g.lineWidth=3;
-    g.beginPath(); g.moveTo(w/2-82,-h/2+64); g.lineTo(w/2-20,-h/2+64); g.stroke();
-    g.setLineDash([9,7]); g.beginPath(); g.moveTo(w/2-82,-h/2+96); g.lineTo(w/2-20,-h/2+96); g.stroke(); g.setLineDash([]);
+    g.beginPath(); g.moveTo(w/2-82,-h/2+66); g.lineTo(w/2-20,-h/2+66); g.stroke();
   });
   return c;
 }
@@ -177,7 +178,7 @@ function makePrint(img, h){
   return { c, w:w+2*b, h:h+2*b };
 }
 
-const exhibitLabel = i => (i===mainIdx ? "الدليل الرئيسي · " : "دليل رقم ") + AR(i+1);
+const exhibitLabel = i => (i===mainIdx ? "الدليل الرئيسي · " : "دليل رقم ") + AR(num(i));
 
 function makeTag(i){
   ctx.font = "700 28px Cairo";
