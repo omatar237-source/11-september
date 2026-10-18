@@ -14,8 +14,10 @@
 <canvas id="c" width="1280" height="720"></canvas>
 <script>
 // YouTube thumbnail (1280×720): presenter on the right with a cinematic grade, bold Arabic
-// title on the left, twin-towers silhouette and aircraft icon as supporting graphics.
-const PHOTO = "__PHOTO__";
+// title on the left, the towers photo blended in between.
+const PHOTO = "__PHOTO__", TOWERS = "__TOWERS__";
+let TW = null;
+const mk = (w, h) => { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; };
 const TITLE_SMALL = "ماذا حدث فعلاً؟";
 const W = 1280, H = 720;
 const cv = document.getElementById("c"), ctx = cv.getContext("2d");
@@ -44,37 +46,22 @@ function draw(img){
   const band = ctx.createLinearGradient(0,0,820,0); band.addColorStop(0, "rgba(4,5,8,.97)"); band.addColorStop(.5, "rgba(4,5,8,.9)"); band.addColorStop(.85, "rgba(4,5,8,.6)"); band.addColorStop(1, "rgba(4,5,8,0)");
   ctx.fillStyle = band; ctx.fillRect(0,0,820,H);
 
-  // ---- illustrated twin towers on fire (original drawing) ----
-  // dusk sky glow behind the towers
-  const sky = ctx.createRadialGradient(500, 300, 20, 500, 360, 460);
-  sky.addColorStop(0, "rgba(255,120,40,.55)"); sky.addColorStop(.35, "rgba(150,50,30,.35)"); sky.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = sky; ctx.fillRect(0, 0, 820, H);
-  const tower = (x, top, w, antenna) => {
-    const g = ctx.createLinearGradient(x, 0, x + w, 0);
-    g.addColorStop(0, "#2a2f3a"); g.addColorStop(.45, "#4a5263"); g.addColorStop(.55, "#3a4150"); g.addColorStop(1, "#1a1d24");
-    ctx.fillStyle = g; ctx.fillRect(x, top, w, H - top);
-    ctx.fillStyle = "rgba(10,12,16,.55)"; for (let cx = x + 3; cx < x + w - 2; cx += 5) ctx.fillRect(cx, top, 2, H - top);   // facade columns
-    ctx.fillStyle = "rgba(255,200,140,.10)"; ctx.fillRect(x + w*.45, top, w*.1, H - top);                                          // light on one face
-    if (antenna){ ctx.fillStyle = "#2a2f3a"; ctx.fillRect(x + w/2 - 3, top - 70, 6, 70); ctx.fillRect(x + w/2 - 8, top - 8, 16, 8); }
-  };
-  tower(448, 120, 74, true); tower(546, 160, 74, false);
-  // fire at the impact floors
-  const fire = (x, y, w, h, seed) => {
-    let r = seed; const rnd = () => (r = (r*16807) % 2147483647) / 2147483647;
-    const glow = ctx.createRadialGradient(x + w/2, y, 4, x + w/2, y, w*1.4); glow.addColorStop(0, "rgba(255,190,80,.95)"); glow.addColorStop(.4, "rgba(255,90,20,.55)"); glow.addColorStop(1, "rgba(255,60,0,0)");
-    ctx.globalCompositeOperation = "screen"; ctx.fillStyle = glow; ctx.fillRect(x - w, y - w, w*3, w*2.4); ctx.globalCompositeOperation = "source-over";
-    for (let i=0;i<26;i++){ const fx = x + rnd()*w, fy = y + (rnd()-.5)*h, fr = 4 + rnd()*10;
-      ctx.fillStyle = `rgba(255,${120 + rnd()*110|0},${20 + rnd()*40|0},${.6 + rnd()*.4})`; ctx.beginPath(); ctx.ellipse(fx, fy, fr*.7, fr, 0, 0, 7); ctx.fill(); }
-  };
-  fire(448, 205, 74, 28, 11); fire(546, 250, 74, 32, 23);
-  // smoke plume drifting to the upper right
-  let r2 = 5; const rn = () => (r2 = (r2*16807) % 2147483647) / 2147483647;
-  ctx.save(); ctx.filter = "blur(10px)";
-  for (let i=0;i<70;i++){ const p = i/70, sx = 480 + p*420 + (rn()-.5)*50, sy = 210 - p*230 + (rn()-.5)*40, sr = 30 + p*70 + rn()*30, c = 20 + rn()*25|0;
-    ctx.fillStyle = `rgba(${c},${c},${c+4},${.55 - p*.3})`; ctx.beginPath(); ctx.arc(sx, sy, sr, 0, 7); ctx.fill(); }
-  ctx.restore();
-  // embers
-  for (let i=0;i<40;i++){ const ex = 420 + rn()*230, ey = 110 + rn()*240; ctx.fillStyle = `rgba(255,${150 + rn()*90|0},60,${rn()*.8})`; ctx.fillRect(ex, ey, 2, 2); }
+  // ---- towers photo (supplied by the channel owner), graded and faded into the layout ----
+  if (TW){
+    const L = mk(W, H), g = L.getContext("2d");
+    // crop: the towers, fire and smoke from the right half of the source
+    const sx = 600, sy = 0, sw = 560, sh = 640, dh = H, dw = sw*dh/sh, dx = 270;
+    g.filter = "contrast(1.25) saturate(.9) brightness(.82)"; g.drawImage(TW, sx, sy, sw, sh, dx, 0, dw, dh); g.filter = "none";
+    // warm-dark grade so the blue sky matches the thumbnail
+    g.globalCompositeOperation = "multiply"; g.fillStyle = "#9a7a6a"; g.fillRect(0,0,W,H);
+    g.globalCompositeOperation = "overlay"; g.fillStyle = "rgba(255,110,40,.25)"; g.fillRect(0,0,W,H);
+    // soft edges: fade left into the title column and right into the presenter
+    g.globalCompositeOperation = "destination-in";
+    const m = g.createLinearGradient(dx, 0, dx + dw, 0);
+    m.addColorStop(0, "rgba(0,0,0,0)"); m.addColorStop(.18, "rgba(0,0,0,1)"); m.addColorStop(.68, "rgba(0,0,0,1)"); m.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = m; g.fillRect(0,0,W,H);
+    ctx.drawImage(L, 0, 0);
+  }
   // ground haze so the towers sink into the dark
   const haze = ctx.createLinearGradient(0, 470, 0, H); haze.addColorStop(0, "rgba(4,5,8,0)"); haze.addColorStop(1, "rgba(4,5,8,.95)");
   ctx.fillStyle = haze; ctx.fillRect(0, 470, W, H - 470);
@@ -110,7 +97,8 @@ function draw(img){
   ctx.fillStyle = "#e3262f"; ctx.fillRect(0, 0, W, 10); ctx.fillRect(0, H-10, W, 10);
   window.__done = true;
 }
-document.fonts.load("900 100px Cairo").finally(() => { const i = new Image(); i.onload = () => draw(i); i.src = PHOTO; });
+const loadImg = src => new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
+document.fonts.load("900 100px Cairo").finally(async () => { TW = await loadImg(TOWERS); draw(await loadImg(PHOTO)); });
 </script>
 </body>
 </html>
