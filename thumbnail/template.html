@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>صورة مصغّرة 11 سبتمبر</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@700;900&family=Reem+Kufi:wght@700&display=swap" rel="stylesheet">
+<style>
+  html,body { margin:0; height:100%; background:#050506; display:flex; align-items:center; justify-content:center; }
+  canvas { width:min(100vw, calc(100vh * 16 / 9)); height:auto; aspect-ratio:16/9; display:block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1280" height="720"></canvas>
+<script>
+// YouTube thumbnail (1280×720): presenter on the right with a cinematic grade, bold Arabic
+// title on the left, twin-towers silhouette and aircraft icon as supporting graphics.
+const PHOTO = "__PHOTO__";
+const TITLE_SMALL = "ماذا حدث فعلاً؟";
+const W = 1280, H = 720;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+
+function plane(x, y, ang, sc, color){
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang); ctx.scale(sc, sc); ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(30,0); ctx.quadraticCurveTo(28,-4, 20,-4.5); ctx.lineTo(4,-4.5); ctx.lineTo(-6,-30); ctx.lineTo(-12,-30); ctx.lineTo(-6,-4.5);
+  ctx.lineTo(-22,-4); ctx.lineTo(-28,-13); ctx.lineTo(-32,-13); ctx.lineTo(-29,-3); ctx.lineTo(-32,0); ctx.lineTo(-29,3); ctx.lineTo(-32,13); ctx.lineTo(-28,13); ctx.lineTo(-22,4);
+  ctx.lineTo(-6,4.5); ctx.lineTo(-12,30); ctx.lineTo(-6,30); ctx.lineTo(4,4.5); ctx.lineTo(20,4.5); ctx.quadraticCurveTo(28,4, 30,0);
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+
+function draw(img){
+  ctx.fillStyle = "#050506"; ctx.fillRect(0,0,W,H);
+  // presenter: scale to full height, centre him at x≈930
+  const s = H / img.height, iw = img.width*s, ix = 930 - 680*s;
+  ctx.save(); ctx.filter = "contrast(1.18) saturate(.82) brightness(.92)"; ctx.drawImage(img, ix, 0, iw, H); ctx.restore();
+  // cool-dark grade over the map, warm red key light on the presenter's side
+  ctx.globalCompositeOperation = "multiply"; ctx.fillStyle = "#8a98b0"; ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation = "screen";
+  const key = ctx.createRadialGradient(950, 250, 30, 960, 300, 520); key.addColorStop(0, "rgba(255,190,150,.45)"); key.addColorStop(.5, "rgba(255,110,70,.22)"); key.addColorStop(1, "rgba(255,80,40,0)");
+  ctx.fillStyle = key; ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation = "source-over";
+  // dark band behind the title so it always reads
+  const band = ctx.createLinearGradient(0,0,760,0); band.addColorStop(0, "rgba(4,5,8,.97)"); band.addColorStop(.62, "rgba(4,5,8,.85)"); band.addColorStop(1, "rgba(4,5,8,0)");
+  ctx.fillStyle = band; ctx.fillRect(0,0,W,H);
+
+  // twin towers silhouette behind the title, with a faint aircraft
+  ctx.save(); ctx.globalAlpha = .16; ctx.fillStyle = "#c9d6ea";
+  ctx.fillRect(170, 150, 62, 470); ctx.fillRect(250, 190, 62, 430); ctx.fillRect(140, 600, 210, 20);
+  ctx.fillRect(196, 112, 6, 40);
+  ctx.restore();
+  plane(430, 120, -0.42, 2.1, "rgba(255,255,255,.9)");
+
+  // title
+  ctx.save(); ctx.textAlign = "right"; ctx.direction = "rtl";
+  ctx.shadowColor = "rgba(0,0,0,.85)"; ctx.shadowBlur = 24; ctx.shadowOffsetY = 6;
+  ctx.font = "900 168px Cairo"; ctx.fillStyle = "#ffffff"; ctx.fillText("سبتمبر", 636, 410);
+  ctx.direction = "ltr"; ctx.textAlign = "left"; ctx.fillStyle = "#e3262f"; ctx.font = "900 210px Cairo"; ctx.fillText("11", 46, 250);
+  ctx.restore();
+  // hook on a yellow tag
+  ctx.save(); ctx.font = "900 62px Cairo"; ctx.direction = "rtl"; ctx.textAlign = "right";
+  const tw = ctx.measureText(TITLE_SMALL).width, tx = 640, ty = 520;
+  ctx.translate(0, 0); ctx.rotate(-1.5*Math.PI/180);
+  ctx.fillStyle = "#ffd21f"; ctx.fillRect(tx - tw - 36, ty - 64, tw + 60, 96);
+  ctx.fillStyle = "#0a0a0c"; ctx.fillText(TITLE_SMALL, tx, ty + 6);
+  ctx.restore();
+  // 2001 stamp
+  ctx.save(); ctx.translate(560, 640); ctx.rotate(-8*Math.PI/180);
+  ctx.strokeStyle = "#e3262f"; ctx.lineWidth = 6; ctx.strokeRect(-120, -42, 240, 84);
+  ctx.fillStyle = "#e3262f"; ctx.font = "900 62px Cairo"; ctx.textAlign = "center"; ctx.direction = "ltr"; ctx.fillText("2001", 0, 22);
+  ctx.restore();
+  // frame accent + vignette
+  const vg = ctx.createRadialGradient(W*.62, H*.45, H*.35, W/2, H/2, H*1.05); vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.6)");
+  ctx.fillStyle = vg; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = "#e3262f"; ctx.fillRect(0, 0, W, 10); ctx.fillRect(0, H-10, W, 10);
+  window.__done = true;
+}
+document.fonts.load("900 100px Cairo").finally(() => { const i = new Image(); i.onload = () => draw(i); i.src = PHOTO; });
+</script>
+</body>
+</html>
