@@ -29,8 +29,16 @@ const ease = t => t<.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
 function rnd(seed){ let s=seed; return () => (s = (s*16807) % 2147483647) / 2147483647; }
 
 // targets: position at t (scope coords), callsign, altitude
-const AA = { x0:250, y0:-40, vx:-17, vy:-5 };
-const aaPos = t => ({ x:AA.x0 + AA.vx*t, y:AA.y0 + AA.vy*t });
+// UAL175 flies straight, then banks through a wide ~120° turn (T_TURN .. T_TURN+TURN_DUR)
+const AA = { x0:180, y0:90, speed:24, h0:Math.atan2(-5,-17), turn:120*Math.PI/180 };
+const T_TURN = 2.4, TURN_DUR = 3.4;
+const aaHeading = t => AA.h0 + AA.turn*ease(clamp((t-T_TURN)/TURN_DUR));
+function aaPos(t){
+  if (t <= T_TURN) return { x:AA.x0 + Math.cos(AA.h0)*AA.speed*t, y:AA.y0 + Math.sin(AA.h0)*AA.speed*t };
+  let p = aaPos(T_TURN);                                  // integrate through the turn in small steps
+  for (let s=T_TURN, dt=.05; s<t; s+=dt){ const h = aaHeading(Math.min(s+dt/2, t)), d = Math.min(dt, t-s)*AA.speed; p = { x:p.x+Math.cos(h)*d, y:p.y+Math.sin(h)*d }; }
+  return p;
+}
 const OTHERS = [
   { x0:-300, y0:180, vx:14, vy:-6, cs:"USA583", alt:"240", type:"B737" },
   { x0:120,  y0:300, vx:-6, vy:-15, cs:"DAL1989", alt:"330", type:"B767" },
