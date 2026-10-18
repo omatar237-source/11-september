@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>الرحلة 93</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  html,body { margin:0; height:100%; background:#03050a; color:#efe6d2; overflow:hidden; font-family:Cairo, sans-serif; }
+  #stage { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { width:min(100vw, calc(100vh * 16 / 9)); height:auto; aspect-ratio:16/9; display:block; }
+  #panel { position:fixed; top:16px; left:16px; z-index:3; background:rgba(10,16,30,.94); border:1px solid #2c3d5e; border-radius:10px; padding:12px; font-size:13px; width:300px; }
+  #panel h3 { margin:0 0 8px; font-size:14px; }
+  #panel label { display:flex; gap:8px; align-items:center; margin-bottom:5px; }
+  #panel label span { flex:1; opacity:.8; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  #panel input { width:64px; background:#060a14; color:#fff; border:1px solid #3b5277; border-radius:6px; padding:3px 5px; font:inherit; direction:ltr; }
+  #panel button { width:100%; margin-top:6px; background:#13213a; color:#fff; border:1px solid #3b5277; border-radius:6px; padding:7px; font:inherit; cursor:pointer; }
+  #panel button.primary { background:#8e1418; border-color:#b8343a; }
+  body.playing #panel { display:none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<div id="panel">
+  <h3>بداية كل مشهد (ثانية)</h3>
+  <div id="cues"></div>
+  <button id="play" class="primary">▶ تشغيل</button>
+  <button id="reset">إعادة الأوقات الأصلية</button>
+</div>
+<script>
+// Flight 93 explainer: six motion-graphic scenes over the narrator's voice.
+// Map outlines: us-atlas states-albers-10m (US Census, public domain), lower 48 only.
+const MAP = __MAP__, VO_SRC = "__VO__";
+const W = 1920, H = 1080;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const clamp = (v,a=0,b=1) => Math.max(a, Math.min(b, v));
+const lerp = (a,b,t) => a + (b-a)*t;
+const ease = t => t<.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+const easeOut = t => 1 - Math.pow(1-t,3);
+const back = t => { const c = 1.7; return 1 + (c+1)*Math.pow(t-1,3) + c*Math.pow(t-1,2); };
+const AR = n => String(n).replace(/\d/g, d => "٠١٢٣٤٥٦٧٨٩"[d]);
+
+// scenes, in the order the narrator says them
+const SCENES = [
+  { text:"الرحلة رقم 93" },
+  { text:"كانت متجهة من نيويورك إلى سان فرانسيسكو" },
+  { text:"وتأخرت بالإقلاع لمدة 42 دقيقة" },
+  { text:"الساعة 9:28 صباحاً، بعد 46 دقيقة من الطيران" },
+  { text:"اقتحم 4 خاطفين قمرة القيادة" },
+  { text:"وغيّروا مسارها نحو واشنطن" },
+];
+const DEFAULT_STARTS = [1.6, 5.4, 10.2, 15.9, 25.5, 30.3];
+let STARTS = DEFAULT_STARTS.slice();
+try { const s = JSON.parse(localStorage.getItem("ua93-starts-v1") || "null"); if (Array.isArray(s) && s.length === 6) STARTS = s.map(Number); } catch(e) {}
+const saveStarts = () => { try { localStorage.setItem("ua93-starts-v1", JSON.stringify(STARTS)); } catch(e) {} };
+let TL = 38.6;
+const sceneAt = t => { let k = -1; STARTS.forEach((s,i) => { if (t >= s) k = i; }); return k; };
+const local = (t, k) => t - STARTS[k];                       // seconds into scene k (negative before it)
+const sceneEnd = k => k < 5 ? STARTS[k+1] : TL - 1.2;
+
+// ---------- map geometry (975×610 Albers units) ----------
+const NATION = new Path2D(MAP.nation), BORDERS = new Path2D(MAP.borders);
+const P = { newark:[867.1,216.9], sf:[34.8,261.5], dc:[827.4,267.5], turn:[738.4,222.8] };
+const qb = (a,c,b,p) => { const u = 1-p; return [u*u*a[0]+2*u*p*c[0]+p*p*b[0], u*u*a[1]+2*u*p*c[1]+p*p*b[1]]; };
+const cb = (a,b,c,d,p) => { const u = 1-p; return [u*u*u*a[0]+3*u*u*p*b[0]+3*u*p*p*c[0]+p*p*p*d[0], u*u*u*a[1]+3*u*u*p*b[1]+3*u*p*p*c[1]+p*p*p*d[1]]; };
+// planned route: Newark → (over Ohio) → San Francisco
+const legA = p => [lerp(P.newark[0], P.turn[0], p), lerp(P.newark[1], P.turn[1], p) - Math.sin(Math.PI*p)*6];
+const legB = p => qb(P.turn, [390,150], P.sf, p);
+const planned = p => p < .2 ? legA(p/.2) : legB((p-.2)/.8);
+// hijacked route: U-turn over Ohio, then south-east towards Washington
+const hijack = p => cb(P.turn, [690,214], [680,292], P.dc, p);
+
+// camera keyframes per scene: whole country for the planned route, then the north-east
+const CAMS = [ null, { s:1.75, cx:470, cy:300 }, { s:2.6, cx:800, cy:240 }, { s:2.3, cx:640, cy:250 }, { s:2.3, cx:640, cy:250 }, { s:4.2, cx:785, cy:245 } ];
+function cam(t){
+  let a = CAMS[1], b = CAMS[1], p = 0;
+  for (let k = 2; k < 6; k++) if (t >= STARTS[k]){ a = CAMS[k-1] || CAMS[1]; b = CAMS[k]; p = ease(clamp(local(t,k)/1.6)); }
+  if (t >= STARTS[5]) { a = CAMS[4]; b = CAMS[5]; p = ease(clamp(local(t,5)/2.4)); }
+  return { s:lerp(a.s,b.s,p), cx:lerp(a.cx,b.cx,p), cy:lerp(a.cy,b.cy,p) };
+}
+const toS = (c, q) => ({ x: W/2 + (q[0]-c.cx)*c.s, y: H/2 + (q[1]-c.cy)*c.s });
+
+// ---------- drawing helpers ----------
+function backdrop(t){
+  const g = ctx.createRadialGradient(W*.45, H*.48, 60, W/2, H/2, H*1.05);
+  g.addColorStop(0, "#14223d"); g.addColorStop(.55, "#0a1222"); g.addColorStop(1, "#03050a");
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle = "rgba(120,160,220,.06)"; ctx.lineWidth = 1; const off = (t*6) % 80;
+  ctx.beginPath(); for (let x=-80+off; x<W+80; x+=80){ ctx.moveTo(x,0); ctx.lineTo(x,H); } for (let y=-80+off*.5; y<H+80; y+=80){ ctx.moveTo(0,y); ctx.lineTo(W,y); } ctx.stroke();
+}
+function finish(t){
+  const vg = ctx.createRadialGradient(W/2, H/2, H*.45, W/2, H/2, H*1.05);
+  vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.65)"); ctx.fillStyle = vg; ctx.fillRect(0,0,W,H);
+  let s = 1 + Math.floor(t*24); const r = () => (s = (s*16807) % 2147483647) / 2147483647;
+  for (let i=0;i<900;i++){ ctx.fillStyle = `rgba(255,255,255,${r()*.035})`; ctx.fillRect(r()*W, r()*H, 2, 2); }
+  const fade = Math.max(clamp(1 - t/.8), clamp((t-(TL-1.2))/1.2));
+  if (fade > 0){ ctx.fillStyle = `rgba(0,0,0,${fade})`; ctx.fillRect(0,0,W,H); }
+}
+function panel(x, y, w, h, a){ ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = "rgba(11,21,38,.94)"; ctx.fillRect(x,y,w,h); ctx.fillStyle = "#e3262f"; ctx.fillRect(x+w-7, y, 7, h); ctx.restore(); }
+function text(s, x, y, font, color, align="right", dir="rtl", a=1){ ctx.save(); ctx.globalAlpha = a; ctx.font = font; ctx.fillStyle = color; ctx.textAlign = align; ctx.direction = dir; ctx.fillText(s, x, y); ctx.restore(); }
+
+// original top-down airliner silhouette, nose pointing +x
+function plane(x, y, ang, sc, color="#fff"){
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang); ctx.scale(sc, sc);
+  ctx.shadowColor = "rgba(0,0,0,.5)"; ctx.shadowBlur = 14; ctx.shadowOffsetY = 6; ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(30,0); ctx.quadraticCurveTo(28,-4, 20,-4.5); ctx.lineTo(4,-4.5); ctx.lineTo(-6,-30); ctx.lineTo(-12,-30); ctx.lineTo(-6,-4.5);
+  ctx.lineTo(-22,-4); ctx.lineTo(-28,-13); ctx.lineTo(-32,-13); ctx.lineTo(-29,-3); ctx.lineTo(-32,0); ctx.lineTo(-29,3); ctx.lineTo(-32,13); ctx.lineTo(-28,13); ctx.lineTo(-22,4);
+  ctx.lineTo(-6,4.5); ctx.lineTo(-12,30); ctx.lineTo(-6,30); ctx.lineTo(4,4.5); ctx.lineTo(20,4.5); ctx.quadraticCurveTo(28,4, 30,0);
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+function pin(c, q, en, ar, k, color="#e3262f", t=0){
+  if (k <= 0) return;
+  const s = toS(c, q), r = 10*back(clamp(k)), pulse = (t*1.2) % 1;
+  ctx.strokeStyle = `rgba(255,255,255,${.6*(1-pulse)*clamp(k)})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(s.x, s.y, r + 30*pulse, 0, 7); ctx.stroke();
+  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, 7); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(s.x, s.y, r*.38, 0, 7); ctx.fill();
+  ctx.save(); ctx.globalAlpha *= clamp(k); ctx.lineWidth = 8; ctx.strokeStyle = "#0b1526"; ctx.textAlign = "center";
+  ctx.direction = "ltr"; ctx.font = "900 30px Cairo"; ctx.fillStyle = "#fff"; ctx.strokeText(en, s.x, s.y + 52); ctx.fillText(en, s.x, s.y + 52);
+  ctx.direction = "rtl"; ctx.font = "700 24px Cairo"; ctx.fillStyle = "#ffd25a"; ctx.strokeText(ar, s.x, s.y + 84); ctx.fillText(ar, s.x, s.y + 84);
+  ctx.restore();
+}
+function strokePath(c, f, p0, p1, color, width, dash){
+  ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = "round"; if (dash) ctx.setLineDash(dash);
+  ctx.beginPath(); for (let i=0;i<=80;i++){ const q = toS(c, f(lerp(p0,p1,i/80))); i ? ctx.lineTo(q.x,q.y) : ctx.moveTo(q.x,q.y); } ctx.stroke(); ctx.restore();
+}
+const heading = (c, f, p) => { const a = toS(c, f(Math.max(0,p-.01))), b = toS(c, f(Math.min(1,p+.01))); return Math.atan2(b.y-a.y, b.x-a.x); };
+
+// analogue + digital clock
+function clock(x, y, r, mins, a, label, accent){
+  ctx.save(); ctx.globalAlpha = a; ctx.translate(x, y);
+  ctx.fillStyle = "rgba(11,21,38,.95)"; ctx.beginPath(); ctx.arc(0,0,r+18,0,7); ctx.fill();
+  ctx.strokeStyle = "#c9d6ea"; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(0,0,r,0,7); ctx.stroke();
+  for (let i=0;i<60;i++){ const g = i*Math.PI/30, l = i%5 ? 8 : 18; ctx.lineWidth = i%5 ? 2 : 4; ctx.beginPath(); ctx.moveTo(Math.sin(g)*(r-4), -Math.cos(g)*(r-4)); ctx.lineTo(Math.sin(g)*(r-4-l), -Math.cos(g)*(r-4-l)); ctx.stroke(); }
+  const hA = ((mins/60) % 12)/12*Math.PI*2, mA = (mins % 60)/60*Math.PI*2;
+  ctx.lineCap = "round"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 10; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(Math.sin(hA)*r*.5, -Math.cos(hA)*r*.5); ctx.stroke();
+  ctx.strokeStyle = accent; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(Math.sin(mA)*r*.82, -Math.cos(mA)*r*.82); ctx.stroke();
+  ctx.fillStyle = accent; ctx.beginPath(); ctx.arc(0,0,9,0,7); ctx.fill();
+  const hh = Math.floor(mins/60), mm = Math.floor(mins%60);
+  ctx.textAlign = "center"; ctx.direction = "ltr"; ctx.fillStyle = "#fff"; ctx.font = "900 64px Cairo";
+  ctx.fillText(String(hh).padStart(2,"0") + ":" + String(mm).padStart(2,"0"), 0, r + 96);
+  ctx.direction = "rtl"; ctx.font = "700 28px Cairo"; ctx.fillStyle = "#c9d6ea"; ctx.fillText(label, 0, r + 140);
+  ctx.restore();
+}
+function person(x, y, s, color){
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(0, -78, 26, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-46, 40); ctx.quadraticCurveTo(-48, -40, 0, -44); ctx.quadraticCurveTo(48, -40, 46, 40); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+// ---------- the frame ----------
+function render(t){
+  ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha = 1;
+  backdrop(t);
+  const k = sceneAt(t), c = cam(t);
+  const mapA = clamp((t - STARTS[1] + .3)/.8) * (k === 4 ? lerp(1, .25, ease(clamp(local(t,4)/.6))) : 1) * (k === 5 ? lerp(.25, 1, ease(clamp(local(t,5)/.6))) : 1);
+
+  // map
+  if (mapA > 0){
+    ctx.save(); ctx.globalAlpha = mapA; ctx.translate(W/2, H/2); ctx.scale(c.s, c.s); ctx.translate(-c.cx, -c.cy);
+    ctx.fillStyle = "#1a2c4c"; ctx.fill(NATION);
+    const draw = easeOut(clamp((t - STARTS[1] + .3)/1.4));
+    ctx.setLineDash([4000]); ctx.lineDashOffset = 4000*(1-draw); ctx.strokeStyle = "#fff"; ctx.lineJoin = "round"; ctx.lineWidth = 3.4/c.s; ctx.stroke(NATION);
+    ctx.setLineDash([]); ctx.globalAlpha = mapA*.4*draw; ctx.lineWidth = 1.4/c.s; ctx.stroke(BORDERS);
+    ctx.restore();
+
+    ctx.save(); ctx.globalAlpha = mapA;
+    // planned route (dashed), drawn in scene 2
+    const plan = ease(clamp(local(t,1)/2.2));
+    if (plan > 0) strokePath(c, planned, 0, plan, k >= 5 ? "rgba(255,255,255,.18)" : "rgba(255,255,255,.55)", 4, [14,12]);
+    pin(c, P.newark, "NEWARK · NY", "نيويورك", clamp((t-STARTS[1]-.2)/.5), "#e3262f", t);
+    pin(c, P.sf, "SAN FRANCISCO", "سان فرانسيسكو", clamp((t-STARTS[1]-1.6)/.5), "#e3262f", t);
+    // flown part: Newark → over Ohio during scene 4
+    const flown = k >= 3 ? ease(clamp(local(t,3)/Math.max(1, sceneEnd(3)-STARTS[3]-.6))) : 0;
+    if (flown > 0) strokePath(c, legA, 0, flown, "#ffd25a", 6);
+    // hijacked route towards Washington in scene 6
+    const hj = k >= 5 ? ease(clamp((local(t,5)-.8)/Math.max(1.5, sceneEnd(5)-STARTS[5]-1.6)))*.86 : 0;
+    if (hj > 0) strokePath(c, hijack, 0, hj, "#ff3b3b", 7);
+    if (k >= 5) pin(c, P.dc, "WASHINGTON", "واشنطن", clamp((local(t,5)-.3)/.5), "#ff3b3b", t);
+    // the aircraft
+    if (k >= 1){
+      let q, ang;
+      if (k >= 5 && hj > 0){ q = hijack(hj); ang = heading(c, hijack, hj); }
+      else if (k >= 3){ q = legA(Math.max(.001, flown)); ang = heading(c, legA, Math.max(.01, flown)); }
+      else { q = P.newark; ang = heading(c, planned, .01); }
+      const sp = toS(c, q), appear = clamp((t - STARTS[1] - .4)/.5);
+      plane(sp.x, sp.y, ang, 1.6*back(appear), k >= 4 ? "#ffdddd" : "#fff");
+      // flight tag
+      ctx.save(); ctx.globalAlpha *= appear; ctx.direction = "ltr"; ctx.textAlign = "left";
+      const bx = sp.x + 40, by = sp.y - 100;
+      ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(sp.x+16, sp.y-16); ctx.lineTo(bx, by+66); ctx.stroke();
+      ctx.fillStyle = "rgba(11,21,38,.92)"; ctx.fillRect(bx, by, 220, 66); ctx.fillStyle = k >= 4 ? "#ff3b3b" : "#e3262f"; ctx.fillRect(bx, by, 6, 66);
+      ctx.fillStyle = "#fff"; ctx.font = "900 28px Cairo"; ctx.fillText("UA93", bx+18, by+32);
+      ctx.fillStyle = "#c9d6ea"; ctx.font = "700 18px Cairo"; ctx.fillText("BOEING 757", bx+18, by+56);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  // scene 1: big flight card
+  if (k === 0 || (k === 1 && local(t,1) < .9)){
+    const inA = clamp(local(t,0)/.6), outA = k === 1 ? 1 - clamp(local(t,1)/.8) : 1, a = inA*outA, sc = lerp(.85, 1, back(inA));
+    ctx.save(); ctx.globalAlpha = a; ctx.translate(W/2, H/2); ctx.scale(sc, sc);
+    ctx.fillStyle = "rgba(11,21,38,.95)"; ctx.fillRect(-470, -190, 940, 380); ctx.fillStyle = "#e3262f"; ctx.fillRect(463, -190, 7, 380);
+    ctx.strokeStyle = "rgba(255,255,255,.12)"; ctx.lineWidth = 2; ctx.strokeRect(-450, -170, 900, 340);
+    plane(-280, 0, -Math.PI/2 + Math.sin(t*1.5)*.04, 3.1);
+    ctx.textAlign = "right"; ctx.direction = "rtl"; ctx.fillStyle = "#c9d6ea"; ctx.font = "700 34px Cairo"; ctx.fillText("الرحلة رقم", 400, -70);
+    ctx.direction = "ltr"; ctx.fillStyle = "#fff"; ctx.font = "900 150px Cairo"; ctx.fillText("93", 400, 80);
+    ctx.font = "700 30px Cairo"; ctx.fillStyle = "#ffd25a"; ctx.fillText("UNITED · BOEING 757", 400, 140);
+    ctx.restore();
+  }
+  // scene 3: delayed take-off clock (08:00 → 08:42)
+  if (k === 2){
+    const L = local(t,2), a = clamp(L/.5)*clamp((sceneEnd(2)-t)/.4), run = ease(clamp((L-.5)/2.6));
+    clock(470, 470, 170, 8*60 + 42*run, a, "تأخر الإقلاع", "#ff5a4f");
+    panel(W-700, 640, 560, 210, a);
+    text("+" + Math.round(42*run), W-170, 800, "900 150px Cairo", "#ff5a4f", "right", "ltr", a);
+    text("دقيقة تأخير", W-470, 750, "700 40px Cairo", "#fff", "right", "rtl", a);
+    text("موعد الإقلاع 08:00", W-470, 800, "700 26px Cairo", "#c9d6ea", "right", "rtl", a);
+  }
+  // scene 4: 09:28, 46 minutes into the flight
+  if (k === 3){
+    const L = local(t,3), a = clamp(L/.5)*clamp((sceneEnd(3)-t)/.4), run = ease(clamp((L-.4)/Math.max(1, sceneEnd(3)-STARTS[3]-1)));
+    clock(330, 520, 140, 8*60 + 42 + 46*run, a, "توقيت الطيران", "#ffd25a");
+    panel(W-640, 760, 520, 150, a);
+    text(AR(Math.round(46*run)) + " دقيقة", W-150, 840, "900 64px Cairo", "#ffd25a", "right", "rtl", a);
+    text("منذ الإقلاع", W-150, 885, "700 26px Cairo", "#c9d6ea", "right", "rtl", a);
+  }
+  // scene 5: four hijackers storm the cockpit
+  if (k === 4){
+    const L = local(t,4), a = clamp(L/.4)*clamp((sceneEnd(4)-t)/.4);
+    const flash = Math.max(0, 1 - L/.5); if (flash > 0){ ctx.fillStyle = `rgba(255,40,40,${.35*flash})`; ctx.fillRect(0,0,W,H); }
+    ctx.save(); ctx.globalAlpha = a;
+    const pulse = .5 + .5*Math.sin(t*6);
+    ctx.fillStyle = `rgba(255,59,59,${.12 + .08*pulse})`; ctx.fillRect(0, H/2 - 250, W, 500);
+    ctx.textAlign = "center"; ctx.direction = "ltr"; ctx.fillStyle = "#ff3b3b"; ctx.font = "900 260px Cairo"; ctx.fillText(String(Math.min(4, Math.ceil(clamp((L-.2)/1.2)*4))), W/2 + 430, H/2 + 90);
+    for (let i=0;i<4;i++){ const pk = back(clamp((L - .3 - i*.25)/.4)); if (pk > 0) person(W/2 - 380 + i*170, H/2 + 40, 1.5*pk, "#f4ecdb"); }
+    ctx.direction = "rtl"; ctx.fillStyle = "#fff"; ctx.font = "900 64px Cairo"; ctx.fillText("خاطفون اقتحموا قمرة القيادة", W/2, H/2 - 170);
+    ctx.fillStyle = "#ff3b3b"; ctx.font = "900 44px Cairo"; ctx.fillText("⚠ اختطاف الطائرة", W/2, H/2 + 205);
+    ctx.restore();
+  }
+
+  // running caption with the narrator's sentence
+  if (k >= 0){
+    const L = local(t,k), D = sceneEnd(k) - STARTS[k], a = clamp(L/.3)*clamp((D-L)/.3);
+    const s = SCENES[k].text, shown = s.slice(0, Math.ceil(s.length*clamp(L/Math.min(1.1, D*.4))));
+    ctx.save(); ctx.globalAlpha = a; ctx.direction = "rtl"; ctx.textAlign = "right";
+    const lg = ctx.createLinearGradient(W,0,W-1100,0); lg.addColorStop(0,"rgba(0,0,0,.9)"); lg.addColorStop(.7,"rgba(0,0,0,.65)"); lg.addColorStop(1,"rgba(0,0,0,0)");
+    ctx.fillStyle = lg; ctx.fillRect(W-1100, H-190, 1100, 120);
+    ctx.fillStyle = "#e3262f"; ctx.fillRect(W-96, H-178, 6, 96);
+    ctx.fillStyle = "#cf5a54"; ctx.font = "700 22px Cairo"; ctx.fillText("الرحلة 93 · 11 سبتمبر 2001", W-116, H-148);
+    ctx.fillStyle = "#f4ecdb"; ctx.font = "900 46px Cairo"; ctx.fillText(shown, W-116, H-96);
+    ctx.restore();
+  }
+  finish(t);
+  ctx.fillStyle = "#000"; ctx.fillRect(0,0,W,34); ctx.fillRect(0,H-34,W,34);
+}
+
+// ---------- sound: the narrator plus a low bed ----------
+let VOBUF = null;
+function b64(src){ const bin = atob(src.slice(src.indexOf(",")+1)), u = new Uint8Array(bin.length); for (let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return u.buffer; }
+function buildSound(ac, out, t0){
+  const g = ac.createGain(); g.gain.value = 1; g.connect(out);
+  if (VOBUF){ const s = ac.createBufferSource(); s.buffer = VOBUF; s.connect(g); s.start(t0); }
+  const bed = ac.createGain(); bed.gain.setValueAtTime(0,t0); bed.gain.linearRampToValueAtTime(.05,t0+2); bed.gain.setValueAtTime(.05,t0+TL-1.5); bed.gain.linearRampToValueAtTime(0,t0+TL);
+  const lp = ac.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=240; lp.connect(bed); bed.connect(g);
+  [55, 55.4, 82.4].forEach(f => { const o = ac.createOscillator(); o.frequency.value = f; o.connect(lp); o.start(t0); o.stop(t0+TL); });
+  STARTS.forEach((s,i) => { const at = t0 + s, o = ac.createOscillator(), og = ac.createGain();          // soft low hit on each scene change
+    o.frequency.setValueAtTime(i===4 ? 90 : 70, at); o.frequency.exponentialRampToValueAtTime(32, at+1.4);
+    og.gain.setValueAtTime(0, at); og.gain.linearRampToValueAtTime(i===4 ? .32 : .16, at+.02); og.gain.exponentialRampToValueAtTime(.0005, at+1.8); o.connect(og); og.connect(g); o.start(at); o.stop(at+1.9); });
+}
+async function renderSoundtrack(){ const oac = new OfflineAudioContext(2, Math.ceil(48000*TL), 48000); buildSound(oac, oac.destination, 0); return oac.startRendering(); }
+function encodeWav(buf){
+  const ch=buf.numberOfChannels, len=buf.length, sr=buf.sampleRate, v=new DataView(new ArrayBuffer(44+len*ch*2));
+  const w=(o,s)=>{ for (let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
+  w(0,"RIFF"); v.setUint32(4,36+len*ch*2,true); w(8,"WAVEfmt "); v.setUint32(16,16,true); v.setUint16(20,1,true);
+  v.setUint16(22,ch,true); v.setUint32(24,sr,true); v.setUint32(28,sr*ch*2,true); v.setUint16(32,ch*2,true); v.setUint16(34,16,true);
+  w(36,"data"); v.setUint32(40,len*ch*2,true);
+  const cs=[...Array(ch)].map((_,c)=>buf.getChannelData(c));
+  for (let i=0,o=44;i<len;i++) for (let c=0;c<ch;c++,o+=2){ const x=Math.max(-1,Math.min(1,cs[c][i])); v.setInt16(o, x<0?x*0x8000:x*0x7fff, true); }
+  return new Blob([v],{type:"audio/wav"});
+}
+
+// ---------- UI ----------
+function buildUI(){
+  const box = document.getElementById("cues"); box.innerHTML = "";
+  SCENES.forEach((s,i) => {
+    const l = document.createElement("label"), inp = document.createElement("input"), sp = document.createElement("span");
+    inp.type = "number"; inp.step = "0.1"; inp.value = STARTS[i]; sp.textContent = (i+1) + ". " + s.text; sp.title = s.text;
+    inp.oninput = () => { STARTS[i] = +inp.value || 0; saveStarts(); render(STARTS[i] + 1.2); };
+    l.append(inp, sp); box.appendChild(l);
+  });
+}
+let AC = null;
+document.getElementById("play").onclick = () => {
+  AC = AC || new AudioContext(); AC.resume();
+  const t0 = AC.currentTime + .1; buildSound(AC, AC.destination, t0); document.body.classList.add("playing");
+  const loop = () => { const t = AC.currentTime - t0; render(clamp(t,0,TL)); if (t < TL) requestAnimationFrame(loop); else document.body.classList.remove("playing"); };
+  requestAnimationFrame(loop);
+};
+document.getElementById("reset").onclick = () => { STARTS = DEFAULT_STARTS.slice(); saveStarts(); buildUI(); render(18); };
+addEventListener("keydown", e => { if (e.target.tagName === "INPUT") return; if (e.key === "h" || e.key === "H") document.getElementById("panel").style.display = document.getElementById("panel").style.display === "none" ? "" : "none"; });
+
+(async function init(){
+  await Promise.race([document.fonts.load("900 50px Cairo"), new Promise(r => setTimeout(r, 2500))]);
+  try { VOBUF = await new OfflineAudioContext(2, 48000, 48000).decodeAudioData(b64(VO_SRC)); TL = VOBUF.duration + 1.2; } catch(e) {}
+  buildUI(); render(18);
+  window.__render = render; window.__TL = TL; window.__ready = !!VOBUF;
+})();
+</script>
+</body>
+</html>
