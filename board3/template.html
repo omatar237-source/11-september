@@ -1,0 +1,885 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>لوحة التحقيق</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&family=Reem+Kufi:wght@600;700&family=Aref+Ruqaa:wght@700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#000; --panel:rgba(18,14,12,.94); --ink:#efe6d2; --accent:#8e1418; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink); font-family:Cairo, sans-serif; overflow:hidden; }
+  #stage { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { width:min(100vw, calc(100vh * 16 / 9)); height:auto; aspect-ratio:16/9; display:block; background:#000; }
+  #panel { position:fixed; top:16px; right:16px; width:330px; max-width:calc(100vw - 32px); max-height:calc(100vh - 32px); overflow:auto;
+           background:var(--panel); border:1px solid #3a2a20; border-radius:10px; padding:14px; z-index:5; font-size:14px; box-shadow:0 10px 40px rgba(0,0,0,.6); }
+  #panel h2 { margin:0 0 6px; font-size:17px; }
+  #panel h3 { margin:12px 0 6px; font-size:13px; opacity:.75; font-weight:700; }
+  #panel p { margin:0 0 10px; opacity:.7; font-size:12px; line-height:1.6; }
+  #panel label { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+  #panel label span { width:22px; opacity:.6; }
+  #panel input, #panel select { flex:1; min-width:0; background:#0d0a08; color:var(--ink); border:1px solid #4a3a2e; border-radius:6px; padding:6px 8px; font:inherit; }
+  .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  button { flex:1; background:#2a1d16; color:var(--ink); border:1px solid #5a4030; border-radius:6px; padding:8px 10px; font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:#b8343a; }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { margin-top:8px; font-size:12px; opacity:.8; min-height:1.2em; }
+  #show { position:fixed; top:16px; right:16px; z-index:4; display:none; flex:none; }
+  body.hidden #panel { display:none; }
+  body.hidden #show { display:block; opacity:.15; }
+  body.hidden #show:hover { opacity:1; }
+  body.recording #show { display:none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<button id="show">⚙</button>
+<div id="panel">
+  <h2>لوحة التحقيق</h2>
+  <p>الصور الخمس هي المادة الوحيدة على اللوحة. الأسماء وعنوان القضية تكتبها أنت؛ لا يُضاف أي اسم أو تاريخ أو رابط غير مؤكد.</p>
+  <h3>عنوان القضية</h3>
+  <label><input id="title" placeholder="ملف القضية"></label>
+  <h3>الأسماء (بترتيب الظهور في الفيديو)</h3>
+  <div id="names"></div>
+  <h3>الصوت (منخفض ليبقى التعليق الصوتي واضحاً)</h3>
+  <label><input type="checkbox" id="snd" checked style="flex:none"> <span style="width:auto;opacity:.85">موسيقى خلفية + صوت الكتابة</span></label>
+  <label><span style="width:auto;opacity:.7">المستوى</span><input type="range" id="vol" min="0" max="100" value="60" style="padding:0"></label>
+  <div id="voBox">
+    <label><input type="checkbox" id="vo" checked style="flex:none"> <span style="width:auto;opacity:.85">التعليق الصوتي <span id="voLen"></span></span></label>
+    <label><span style="width:auto;opacity:.7">يبدأ عند (ثانية)</span><input type="number" id="voStart" min="0" step="0.1" value="2.4"></label>
+    <label><span style="width:auto;opacity:.7">مستوى الصوت</span><input type="range" id="voVol" min="0" max="100" value="80" style="padding:0"></label>
+    <label><span style="width:auto;opacity:.7">السرعة <b id="voRateLbl">×1.00</b></span><input type="range" id="voRate" min="0.7" max="1.5" step="0.05" value="1" style="padding:0"></label>
+  </div>
+  <div class="row">
+    <button id="mp4" class="primary">⬇ حفظ الفيديو MP4</button>
+  </div>
+  <div class="row">
+    <button id="play">▶ تشغيل</button>
+    <button id="rec">⏺ تسجيل مباشر</button>
+  </div>
+  <div class="row">
+    <button id="stills">⬇ تصدير اللقطات PNG</button>
+    <button id="wav">⬇ الصوت كاملاً WAV</button>
+  </div>
+  <div class="row">
+    <button id="hide">إخفاء (H)</button>
+  </div>
+  <div id="status"></div>
+</div>
+
+<script>
+const VO_SRC = "__VO__";
+const SRC = { 1:"__IMG1__", 2:"__IMG2__", 3:"__IMG3__", 4:"__IMG4__", 5:"__IMG5__", 6:"__IMG6__" };
+const DEFAULT_NAMES = ["الاسم غير محدد","الاسم غير محدد","الاسم غير محدد","الاسم غير محدد","الاسم غير محدد"];
+const DEFAULT_TITLE = "ملف القضية";
+const PRESET_TITLE = "11 سبتمبر";
+// names[photo index] — photo 1 is the centre photo (character 5); see VISIT below
+const PRESET_NAMES = ["هاني حنجور","خالد المحدار","نواف الحازمي","سالم الحازمي","ماجد موقد"];   // names[photo index], same as the order in the voice-over
+const AR = n => String(n).padStart(2,"0").replace(/\d/g, d => "٠١٢٣٤٥٦٧٨٩"[d]);
+
+const W = 1920, H = 1080, S = 2.2;
+const cv = document.getElementById("c"); let ctx = cv.getContext("2d");
+
+// ---------- layout ----------
+// SLOTS: 0 = centre (main evidence), then the four corners clockwise from top-right (RTL reading start)
+const BOARD = { x:160, y:90, w:1600, h:900 };
+const SLOTS = [
+  { x:960,  y:478, h:270, rot:-1.2 },
+  { x:1500, y:300, h:240, rot: 2.5 },
+  { x:420,  y:300, h:240, rot:-3   },
+  { x:420,  y:730, h:230, rot: 2   },
+  { x:1500, y:730, h:230, rot:-2.5 },
+];
+const HUB = { x:960, y:116 };                 // pin on the case-title card
+const LEGEND = { x:960, y:858 };
+
+// photo index = order the files were sent (images/1..5). VISIT = order they appear in the video:
+// same as the order sent; #5 is the centre photo, shown last
+const VISIT = [0,1,2,3,4];
+const num = i => VISIT.indexOf(i) + 1;
+const mainIdx = VISIT[VISIT.length-1];
+
+let names = PRESET_NAMES.slice(), caseTitle = PRESET_TITLE;
+try {
+  const s = JSON.parse(localStorage.getItem("board3-v1") || "null");
+  if (s) { if (Array.isArray(s.names) && s.names.length===5) names = s.names; caseTitle = s.title || PRESET_TITLE; }
+} catch(e) {}
+const save = () => { try { localStorage.setItem("board3-v1", JSON.stringify({ names, title:caseTitle })); } catch(e) {} };
+
+// photo i (0..4, order sent) -> slot
+let PHOTOS = [];
+function assignSlots(){
+  const others = VISIT.filter(i => i!==mainIdx);
+  PHOTOS = [0,1,2,3,4].map(i => { const slot = i===mainIdx ? 0 : 1 + others.indexOf(i); return { img:i+1, slot, ...SLOTS[slot] }; });
+}
+
+// ---------- helpers ----------
+const clamp = (v,a=0,b=1) => Math.max(a, Math.min(b, v));
+const lerp = (a,b,t) => a + (b-a)*t;
+const ease = t => t<.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+const easeOut = t => 1 - Math.pow(1-t,3);
+const easeSine = t => (1 - Math.cos(Math.PI*t))/2;           // gentlest in-out: lowest peak speed, no jerk at the ends
+// snap: visibly moving within a frame or two of the start, then a long gentle glide in (cubic-bezier(.2,.3,.15,1))
+const easeSnap = p => { let lo=0, hi=1; for (let i=0;i<24;i++){ const t=(lo+hi)/2, x=3*(1-t)*(1-t)*t*.2+3*(1-t)*t*t*.15+t*t*t; if (x<p) lo=t; else hi=t; }
+  const t=(lo+hi)/2; return 3*(1-t)*(1-t)*t*.3+3*(1-t)*t*t+t*t*t; };
+function mk(w,h){ const c=document.createElement("canvas"); c.width=Math.ceil(w); c.height=Math.ceil(h); return c; }
+function rnd(seed){ let s=seed; return () => (s = (s*16807) % 2147483647) / 2147483647; }
+function loadImg(src){ return new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=src; }); }
+
+let IM = {}, STATIC, PRINTS = [], TAGS = [], NOISE = [], TITLECARD;
+
+// ---------- static board (wall, frame, cork, legend) ----------
+function buildStatic(){
+  const c = mk(W*S, H*S), g = c.getContext("2d"); g.scale(S,S);
+  g.fillStyle = "#0c0907"; g.fillRect(0,0,W,H);
+  const r = rnd(7);
+  for (let i=0;i<9000;i++){ g.fillStyle = `rgba(${r()<.5?255:0},${r()<.5?220:0},180,${r()*.03})`; g.fillRect(r()*W, r()*H, 1+r()*2, 1+r()*2); }
+  g.save(); g.shadowColor="rgba(0,0,0,.85)"; g.shadowBlur=60; g.shadowOffsetY=25;
+  g.fillStyle="#2a1a10"; g.fillRect(BOARD.x-22, BOARD.y-22, BOARD.w+44, BOARD.h+44); g.restore();
+  const wood = g.createLinearGradient(0,BOARD.y-22,0,BOARD.y+BOARD.h+22);
+  wood.addColorStop(0,"#45291a"); wood.addColorStop(.5,"#2b190e"); wood.addColorStop(1,"#1a0f08");
+  g.fillStyle = wood; g.fillRect(BOARD.x-22, BOARD.y-22, BOARD.w+44, BOARD.h+44);
+  for (let i=0;i<260;i++){ g.strokeStyle=`rgba(0,0,0,${r()*.25})`; g.lineWidth=r()*1.5; const y=BOARD.y-22+r()*(BOARD.h+44);
+    g.beginPath(); g.moveTo(BOARD.x-22,y); g.lineTo(BOARD.x+BOARD.w+22,y+r()*4-2); g.stroke(); }
+  const cork = IM[6], sx=80, sy=210, sw=640, sh=370;
+  for (let ix=0; ix<2; ix++) for (let iy=0; iy<2; iy++)
+    g.drawImage(cork, sx,sy,sw,sh, BOARD.x+ix*BOARD.w/2, BOARD.y+iy*BOARD.h/2, BOARD.w/2+1, BOARD.h/2+1);
+  g.fillStyle="rgba(45,22,8,.30)"; g.fillRect(BOARD.x,BOARD.y,BOARD.w,BOARD.h);
+  const edge = (x0,y0,x1,y1,x,y,w,h)=>{ const lg=g.createLinearGradient(x0,y0,x1,y1); lg.addColorStop(0,"rgba(0,0,0,.55)"); lg.addColorStop(1,"rgba(0,0,0,0)"); g.fillStyle=lg; g.fillRect(x,y,w,h); };
+  edge(0,BOARD.y,0,BOARD.y+40, BOARD.x,BOARD.y,BOARD.w,40);
+  edge(0,BOARD.y+BOARD.h,0,BOARD.y+BOARD.h-40, BOARD.x,BOARD.y+BOARD.h-40,BOARD.w,40);
+  edge(BOARD.x,0,BOARD.x+40,0, BOARD.x,BOARD.y,40,BOARD.h);
+  edge(BOARD.x+BOARD.w,0,BOARD.x+BOARD.w-40,0, BOARD.x+BOARD.w-40,BOARD.y,40,BOARD.h);
+  for (let i=0;i<60;i++){ g.fillStyle="rgba(20,10,4,.6)"; g.beginPath(); g.arc(BOARD.x+30+r()*(BOARD.w-60), BOARD.y+30+r()*(BOARD.h-60), 1.4, 0, 7); g.fill(); }
+
+  // legend index card: what the red string means
+  paper(g, LEGEND.x, LEGEND.y, 330, 100, .8, "#e9e1cf", (g,w,h)=>{
+    g.strokeStyle="rgba(150,40,40,.35)"; g.lineWidth=1; g.beginPath(); g.moveTo(-w/2,-h/2+34); g.lineTo(w/2,-h/2+34); g.stroke();
+    g.strokeStyle="rgba(60,90,140,.18)"; for (let y=-h/2+58; y<h/2; y+=26){ g.beginPath(); g.moveTo(-w/2,y); g.lineTo(w/2,y); g.stroke(); }
+    g.direction="rtl"; g.textAlign="right"; g.fillStyle="#3a2a1a"; g.font="700 17px Cairo"; g.fillText("مفتاح اللوحة", w/2-16, -h/2+25);
+    g.font="400 17px Cairo"; g.fillText("صلة بين الأدلة", w/2-96, -h/2+72);
+    g.lineCap="round"; g.strokeStyle="#9e1218"; g.lineWidth=3;
+    g.beginPath(); g.moveTo(w/2-82,-h/2+66); g.lineTo(w/2-20,-h/2+66); g.stroke();
+  });
+  return c;
+}
+
+function paper(g, x, y, w, h, rot, color, fn){
+  g.save(); g.translate(x,y); g.rotate(rot*Math.PI/180);
+  g.shadowColor="rgba(0,0,0,.5)"; g.shadowBlur=14; g.shadowOffsetX=4; g.shadowOffsetY=7;
+  g.fillStyle=color; g.fillRect(-w/2,-h/2,w,h); g.shadowColor="transparent";
+  const r=rnd(Math.round(x+y)); for (let j=0;j<w*h/60;j++){ g.fillStyle=`rgba(90,70,40,${r()*.07})`; g.fillRect(-w/2+r()*w,-h/2+r()*h,1.5,1.5); }
+  const lg=g.createLinearGradient(-w/2,-h/2,w/2,h/2); lg.addColorStop(0,"rgba(255,255,255,.07)"); lg.addColorStop(1,"rgba(0,0,0,.16)");
+  g.fillStyle=lg; g.fillRect(-w/2,-h/2,w,h);
+  fn && fn(g,w,h); g.restore();
+}
+
+// case-title card (manila folder tab) — text comes only from the user
+function makeTitleCard(){
+  ctx.font = "700 40px 'Reem Kufi', Cairo";
+  const w = Math.max(360, ctx.measureText(caseTitle).width + 90), h = 112, k = S*1.2, pad = 30;
+  const c = mk((w+pad*2)*k, (h+pad*2)*k), g = c.getContext("2d"); g.scale(k,k);
+  paper(g, w/2+pad, h/2+pad, w, h, 0, "#c4a265", (g,w,h)=>{
+    g.strokeStyle="rgba(60,40,15,.35)"; g.lineWidth=1.5; g.strokeRect(-w/2+10,-h/2+10,w-20,h-20);
+    g.direction="rtl"; g.textAlign="center"; g.fillStyle="#2e2010";
+    g.font="700 15px Cairo"; g.fillText("ملف التحقيق", 0, -h/2+34);
+    g.font="700 40px 'Reem Kufi', Cairo"; g.fillText(caseTitle, 0, 30);
+  });
+  return { c, w:w+pad*2, h:h+pad*2 };
+}
+
+function makePrint(img, h){
+  const w = h*img.width/img.height, b = 12, k = S*1.2;
+  const c = mk((w+2*b)*k, (h+2*b)*k), g = c.getContext("2d"); g.scale(k,k);
+  g.fillStyle="#f1ece1"; g.fillRect(0,0,w+2*b,h+2*b);
+  g.filter="contrast(1.04) saturate(.88)";          // light grade only: the photo itself is untouched
+  g.drawImage(img, b, b, w, h); g.filter="none";
+  const gl = g.createLinearGradient(0,0,w,h); gl.addColorStop(0,"rgba(255,255,255,.07)"); gl.addColorStop(.45,"rgba(255,255,255,0)"); gl.addColorStop(1,"rgba(0,0,0,.10)");
+  g.fillStyle=gl; g.fillRect(b,b,w,h);
+  g.strokeStyle="rgba(0,0,0,.25)"; g.lineWidth=1; g.strokeRect(b,b,w,h);
+  return { c, w:w+2*b, h:h+2*b };
+}
+
+const exhibitLabel = i => (i===mainIdx ? "الدليل الرئيسي · " : "دليل رقم ") + AR(num(i));
+
+function makeTag(i){
+  ctx.font = "700 28px Cairo";
+  const tw = ctx.measureText(names[i]).width;
+  const w = Math.max(230, tw + 56), h = 70, k = S*1.2;
+  const c = mk(w*k, h*k), g = c.getContext("2d"); g.scale(k,k);
+  g.fillStyle="#ece3cf"; g.fillRect(0,0,w,h);
+  const r = rnd(31+i); for (let j=0;j<300;j++){ g.fillStyle=`rgba(90,70,40,${r()*.08})`; g.fillRect(r()*w,r()*h,1.5,1.5); }
+  g.direction="rtl"; g.textAlign="center"; g.fillStyle="#8a1a1a"; g.font="700 14px Cairo";
+  g.fillText(exhibitLabel(i), w/2, 21);
+  g.fillStyle="#17120e"; g.font="700 28px Cairo"; g.fillText(names[i], w/2, 55);
+  return { c, w, h };
+}
+
+const pinOf = i => ({ x:PHOTOS[i].x, y:PHOTOS[i].y - PRINTS[i].h/2 + 6 });
+// ---------- extra evidence: illustrated aircraft + Pentagon prints, pinned between the corners ----------
+const EXTRA = [
+  { kind:"plane",    x:1238, y:548, rot: 3.2, label:"الطائرة · الرحلة 77" },
+  { kind:"pentagon", x:682,  y:548, rot:-3.0, label:"البنتاغون" },
+];
+function makeIllus(kind){
+  const w = 230, h = 150, b = 11, k = S*1.2, c = mk((w+2*b)*k, (h+2*b+34)*k), g = c.getContext("2d"); g.scale(k,k);
+  g.fillStyle = "#f1ece1"; g.fillRect(0,0,w+2*b,h+2*b+34);
+  g.save(); g.beginPath(); g.rect(b,b,w,h); g.clip(); g.translate(b,b);
+  if (kind === "plane"){
+    const sky = g.createLinearGradient(0,0,0,h); sky.addColorStop(0,"#8e9aa6"); sky.addColorStop(1,"#d9d6cc"); g.fillStyle = sky; g.fillRect(0,0,w,h);
+    g.fillStyle = "rgba(255,255,255,.35)"; g.beginPath(); g.ellipse(60,40,70,14,0,0,7); g.ellipse(180,105,60,10,0,0,7); g.fill();
+    g.translate(w/2, h/2+6); g.rotate(-.08); g.fillStyle = "#e9e9e6"; g.strokeStyle = "#5c5f63"; g.lineWidth = 1.2;
+    g.beginPath(); g.moveTo(-92,-6); g.quadraticCurveTo(-104,0,-92,7); g.lineTo(78,8); g.quadraticCurveTo(92,6,96,-6); g.lineTo(84,-8); g.closePath(); g.fill(); g.stroke();   // fuselage
+    g.fillStyle = "#b8bcc1"; g.beginPath(); g.moveTo(-10,2); g.lineTo(30,30); g.lineTo(44,30); g.lineTo(20,2); g.closePath(); g.fill(); g.stroke();                              // wing
+    g.beginPath(); g.moveTo(68,-6); g.lineTo(88,-40); g.lineTo(98,-40); g.lineTo(92,-6); g.closePath(); g.fill(); g.stroke();                                                       // tail
+    g.fillStyle = "#7d8187"; g.beginPath(); g.ellipse(14,16,13,5,0,0,7); g.fill();                                                                                               // engine
+    g.fillStyle = "#3b3f45"; for (let x=-76; x<66; x+=7) g.fillRect(x,-3,2.5,3);
+  } else {
+    g.fillStyle = "#8f9180"; g.fillRect(0,0,w,h);
+    g.strokeStyle = "rgba(60,60,55,.5)"; g.lineWidth = 5; g.beginPath(); g.moveTo(-10,h*.85); g.lineTo(w+10,h*.55); g.moveTo(w*.15,-10); g.lineTo(w*.05,h+10); g.stroke();
+    const poly = (r, rot) => { g.beginPath(); for (let i=0;i<5;i++){ const a = rot + i*2*Math.PI/5 - Math.PI/2; i ? g.lineTo(w/2+Math.cos(a)*r, h/2+Math.sin(a)*r) : g.moveTo(w/2+Math.cos(a)*r, h/2+Math.sin(a)*r); } g.closePath(); };
+    [[66,"#c9c6bb"],[56,"#a9a69c"],[47,"#c4c1b6"],[38,"#a3a096"],[29,"#bfbcb1"],[19,"#6f7a5c"]].forEach(([r,c]) => { poly(r,.12); g.fillStyle = c; g.fill(); });
+    g.strokeStyle = "rgba(40,40,35,.35)"; g.lineWidth = 1; for (const r of [66,47,29,19]){ poly(r,.12); g.stroke(); }
+  }
+  g.restore();
+  g.fillStyle = "rgba(0,0,0,.05)"; g.fillRect(b,b,w,h);
+  g.direction = "rtl"; g.textAlign = "center"; g.fillStyle = "#8a1a1a"; g.font = "700 15px Cairo"; g.fillText("دليل", (w+2*b)/2, h+2*b+4);
+  g.fillStyle = "#17120e"; g.font = "700 19px Cairo"; g.fillText(EXTRA.find(e=>e.kind===kind).label, (w+2*b)/2, h+2*b+26);
+  return { c, w:w+2*b, h:h+2*b+34 };
+}
+let ILLUS = [];
+const extraPin = j => ({ x:EXTRA[j].x, y:EXTRA[j].y - ILLUS[j].h/2 + 6 });
+
+// ---------- FBI agent seen from behind, standing in front of the board (screen-space foreground) ----------
+let AGENT = null;                                                       // drawn on its own layer so a fade never shows the shapes overlapping
+function drawAgent(t, cam){
+  const s = Math.pow(cam.z/WIDE.z, 2.2), a = clamp(1 - (s-1.55)/.9);      // solid until the camera pushes past him
+  if (a <= 0) return;
+  AGENT = AGENT || mk(W, H);
+  const real = ctx; ctx = AGENT.getContext("2d");
+  ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,W,H);
+  ctx.save();
+  // right third of the frame, so the centre photo stays clear
+  const x = W/2 + 360 - (cam.x - WIDE.x)*1.8*s + Math.sin(t*.7)*3, y = H + 40 + (s-1)*520;
+  ctx.translate(x, y); ctx.scale(.86*s, .86*s); ctx.filter = "blur(1.6px)";
+  const sway = Math.sin(t*1.1)*1.5;
+  ctx.fillStyle = "#0b0a09";
+  ctx.beginPath();                                                       // shoulders + jacket
+  ctx.moveTo(-330, 40); ctx.bezierCurveTo(-320,-260, -250,-390, -120,-420);
+  ctx.quadraticCurveTo(0,-445+sway, 120,-420); ctx.bezierCurveTo(250,-390, 320,-260, 330, 40); ctx.closePath(); ctx.fill();
+  ctx.fillRect(-58,-500,116,100);                                        // neck
+  ctx.beginPath(); ctx.ellipse(sway, -585, 92, 112, 0, 0, 7); ctx.fill();     // head
+  ctx.fillStyle = "#151210"; ctx.beginPath(); ctx.ellipse(sway, -640, 88, 62, 0, Math.PI, 0); ctx.fill();          // hair
+  // warm rim light from the board lamp
+  ctx.strokeStyle = "rgba(255,190,120,.28)"; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.ellipse(sway, -585, 92, 112, 0, Math.PI*1.08, Math.PI*1.92); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-250,-385); ctx.quadraticCurveTo(-120,-430, 0,-440); ctx.quadraticCurveTo(120,-430, 250,-385); ctx.stroke();
+  ctx.filter = "none";
+  ctx.fillStyle = "rgba(214,176,72,.82)"; ctx.font = "900 118px Arial, Helvetica, sans-serif"; ctx.textAlign = "center"; ctx.direction = "ltr";
+  ctx.fillText("FBI", 0, -230);
+  ctx.restore();
+  ctx = real; ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha = a; ctx.drawImage(AGENT, 0, 0); ctx.restore();
+}
+
+
+// strings are scheduled in buildTimeline: each one draws while the camera travels to that person
+const pt = x => x==="hub" ? HUB : (typeof x==="string" && x[0]==="x") ? extraPin(+x[1]) : pinOf(x);
+
+function makeNoise(){
+  for (let n=0;n<6;n++){ const c=mk(480,270), g=c.getContext("2d"), d=g.createImageData(480,270);
+    for (let i=0;i<d.data.length;i+=4){ const v=Math.random()*255; d.data[i]=d.data[i+1]=d.data[i+2]=v; d.data[i+3]=255; }
+    g.putImageData(d,0,0); NOISE.push(c); }
+}
+
+// ---------- camera timeline ----------
+const WIDE = { x:960, y:540, z:.96 };
+let SEQ = [], TL = 0, SHOTS = [], LINKS = [], CAPS = [], TIM = {};
+
+// Splits the voice-over into its phrases. This recording has no intro: it is just the five
+// names, so the first name starts with the speech and the 4 longest pauses split the rest.
+function voCues(){
+  if (!voOn()) return null;
+  const d = VOBUF.getChannelData(0), sr = VOBUF.sampleRate, w = Math.round(sr*.02), e = [];
+  for (let i=0;i<d.length;i+=w){ let s=0; for (let j=i;j<Math.min(i+w,d.length);j++) s+=d[j]*d[j]; e.push(10*Math.log10(s/w+1e-12)); }
+  const sm = e.map((_,i)=>{ let s=0,n=0; for (let k=i-2;k<=i+2;k++) if (e[k]!==undefined){ s+=e[k]; n++; } return s/n; });
+  const thr = -34, first = Math.max(0, sm.findIndex(v=>v>thr))*.02;
+  let lastI = sm.length-1; while (lastI>0 && sm[lastI]<=thr) lastI--;
+  const end = (lastI+1)*.02, gaps = []; let st = null;
+  sm.forEach((v,i)=>{ if (v<=thr){ if (st===null) st=i; } else if (st!==null){ if (i-st>=3) gaps.push({ a:st*.02, b:i*.02 }); st=null; } });
+  let cuts = [first, ...gaps.filter(g=>g.a>first && g.b<end).sort((x,y)=>(y.b-y.a)-(x.b-x.a)).slice(0,4).map(g=>g.b).sort((x,y)=>x-y)];
+  if (cuts.length<5) cuts = [0,1,2,3,4].map(k=>first+(end-first)*k/5);   // no clear pauses: split evenly
+  return { first, end, cuts };
+}
+
+function buildTimeline(){
+  SEQ = []; TL = 0; SHOTS = []; LINKS = []; CAPS = [];
+  let cur = { ...WIDE };
+  const hold = (dur, push, focus, label, dz) => { const a={...cur}, b={...cur, z:cur.z+push, ...(dz||{})};
+    SEQ.push({k:"h", a, b, dur, focus, t0:TL}); if (label) SHOTS.push({ label, t:TL+dur*.7 }); TL+=dur; cur=b; };
+  const move = (to, dur, quick, snap) => { SEQ.push({k:"m", a:{...cur}, b:{...to}, dur, t0:TL, quick, snap}); TL+=dur; cur={...to}; };
+  const close = i => ({ x:PHOTOS[i].x, y:PHOTOS[i].y+44, z:2.0 });
+  const cue = voCues();
+
+  if (!cue){
+    // no voice-over: the slow 41-second version
+    TIM = { fadeIn:1.2, titleIn:[.8,1.8], titleOut:[3.6,4.4], fadeOut:1.6, typeStart:.35, typeDur:.9, capFade:.35, dip:.45, radial:[1.4,.45,1.5] };
+    hold(4.6, .06, -1, "00-wide");
+    VISIT.forEach((i,k) => {
+      const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = k===0 ? 3.0 : 2.2;
+      LINKS.push({ a:from, b:i, start:TL, dur, follow:true });
+      move(last ? { ...close(i), z:1.85 } : close(i), dur);
+      const hd = last ? 4.6 : 3.2;
+      if (last) VISIT.slice(0,-2).concat("hub").forEach((j,m) => LINKS.push({ a:i, b:j, start:TL+TIM.radial[0]+m*TIM.radial[1], dur:TIM.radial[2] }));
+      CAPS.push({ i, t0:TL, t1:TL+hd });
+      hold(hd, last ? .1 : .12, i, "0" + num(i) + "-person");
+    });
+    move({ x:960, y:520, z:1.04 }, 3.0);
+    hold(4.4, -.08, -2, "06-final", { y:540 });
+    return;
+  }
+
+  // voice-over: the board waits on the wide shot through the intro; the moment each name is
+  // spoken the camera sets off to that person and the name types in
+  const o = voStart(), starts = cue.cuts.map(c => o + c), speechEnd = o + cue.end;
+  // each move uses most of the time until the next name (up to ~1 s) so it can ease gently in and out
+  const md = k => Math.min(k===0 ? 1.0 : .9, ((k<starts.length-1 ? starts[k+1] : starts[k]+2) - starts[k]) * .8);
+  const lead = .05;                                                        // the pause detector marks a name ~1–3 frames late
+  TIM = { fadeIn:.35, titleIn:[0, .25], titleOut:[Math.max(.5, starts[0]-.7), Math.max(.8, starts[0]-.3)], fadeOut:1.0,
+          typeStart:0, typeDur:null, typeMax:.28, capFade:.06, dip:.08, dipByDist:true, holdSine:true, radial:null };
+  hold(starts[0]-lead, .14, -1, "00-wide");                              // slow creep in from behind the agent
+  VISIT.forEach((i,k) => {
+    const last = k===VISIT.length-1, from = k===0 ? "hub" : VISIT[k-1], dur = md(k), t0 = TL;
+    LINKS.push({ a:from, b:i, start:TL, dur, follow:true, snap:true });
+    move(last ? { ...close(i), z:1.85 } : close(i), dur, false, true);
+    const hd = last ? Math.max(1.4, speechEnd + .25 - TL) : Math.max(.2, starts[k+1] - lead - TL);
+    if (last){                                                            // radial strings while #5 is spoken about
+      const n = VISIT.length+1, step = hd*.55/n;                      // 3 corner photos + title + the two extra prints
+      VISIT.slice(0,-2).concat("hub","x0","x1").forEach((j,m) => LINKS.push({ a:i, b:j, start:TL+hd*.12+m*step, dur:Math.max(.35, step*1.6) }));
+    }
+    CAPS.push({ i, t0, t1:TL+hd });                                         // caption types with the name, stays until the next name
+    hold(hd, last ? .08 : .06, i, "0" + num(i) + "-person");
+  });
+  move({ x:960, y:520, z:1.04 }, .9);
+  hold(1.6, -.05, -2, "06-final", { y:540 });
+}
+
+// holdSine: the slow push-in after a move starts from rest, so there is no jolt when the camera lands
+function camAt(t){
+  const s = SEQ.find(s => t < s.t0+s.dur) || SEQ[SEQ.length-1];
+  const p = clamp((t-s.t0)/s.dur);
+  let x,y,z;
+  if (s.k==="h"){ const e=s.focus===-2?ease(p):(TIM.holdSine?easeSine(p):easeOut(p)); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e); z=lerp(s.a.z,s.b.z,e); }
+  else { const e=s.snap ? easeSnap(p) : s.quick ? easeOut(p) : easeSine(p); x=lerp(s.a.x,s.b.x,e); y=lerp(s.a.y,s.b.y,e);
+         z=lerp(s.a.z,s.b.z,e);
+         if (s.a.z>1.5 && s.b.z>1.5){   // ease out a little mid-move (more for longer moves) so the pan never whips
+           const dip = TIM.dipByDist ? Math.min(.45, Math.hypot(s.b.x-s.a.x, s.b.y-s.a.y)/2200) : TIM.dip;
+           z -= dip*Math.sin(Math.PI*e); } }
+  x += Math.sin(t*.63)*5 + Math.sin(t*1.7)*2; y += Math.cos(t*.51)*4 + Math.sin(t*2.1)*1.5;
+  let rot = (Math.sin(t*.37)*.25 + Math.sin(t*.9)*.08) * Math.PI/180;
+  if (s.focus===-2) rot += -.9*ease(p)*Math.PI/180;          // slight dutch tilt on the final shot
+  return { x, y, z, rot, seg:s, p, local:(t-s.t0) };
+}
+
+// ---------- drawing ----------
+function quadPoint(a,c,b,t){ const u=1-t; return { x:u*u*a.x+2*u*t*c.x+t*t*b.x, y:u*u*a.y+2*u*t*c.y+t*t*b.y }; }
+function drawString(a, b, prog, dashed){
+  if (prog<=0) return;
+  const d=Math.hypot(b.x-a.x,b.y-a.y), c={ x:(a.x+b.x)/2, y:(a.y+b.y)/2 + d*.07 };
+  // partial curve [0..prog] via de Casteljau so dashed strings can draw in too
+  const c1={ x:lerp(a.x,c.x,prog), y:lerp(a.y,c.y,prog) }, e=quadPoint(a,c,b,prog);
+  const path = (ox,oy)=>{ ctx.beginPath(); ctx.moveTo(a.x+ox,a.y+oy); ctx.quadraticCurveTo(c1.x+ox,c1.y+oy,e.x+ox,e.y+oy); };
+  ctx.save(); ctx.lineCap="round"; ctx.setLineDash(dashed ? [14,10] : []);
+  ctx.strokeStyle="rgba(0,0,0,.45)"; ctx.lineWidth=3; path(4,9); ctx.stroke();
+  ctx.strokeStyle= dashed ? "#8c1016" : "#a5121a"; ctx.lineWidth = dashed ? 2.2 : 2.7; path(0,0); ctx.stroke();
+  if (!dashed){ ctx.strokeStyle="rgba(255,120,110,.3)"; ctx.lineWidth=.8; path(0,-.6); ctx.stroke(); }
+  ctx.restore();
+  if (dashed && prog>=1){                         // hand-written "?" marks the lead as unconfirmed
+    const m=quadPoint(a,c,b,.5);
+    ctx.save(); ctx.fillStyle="rgba(150,20,24,.85)"; ctx.font="700 40px 'Aref Ruqaa', Cairo"; ctx.textAlign="center";
+    ctx.fillText("؟", m.x+14, m.y-6); ctx.restore();
+  }
+}
+
+function drawPin(x,y,glow){
+  ctx.save();
+  if (glow>0){ const rg=ctx.createRadialGradient(x,y,4,x,y,40); rg.addColorStop(0,`rgba(255,80,60,${.5*glow})`); rg.addColorStop(1,"rgba(255,80,60,0)"); ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(x,y,40,0,7); ctx.fill(); }
+  ctx.fillStyle="rgba(0,0,0,.45)"; ctx.beginPath(); ctx.ellipse(x+5,y+8,9,6,0,0,7); ctx.fill();
+  const rg=ctx.createRadialGradient(x-3,y-3,1,x,y,10); rg.addColorStop(0,"#ff8a80"); rg.addColorStop(.35,"#c81d24"); rg.addColorStop(1,"#55090c");
+  ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(x,y,9.5,0,7); ctx.fill();
+  ctx.restore();
+}
+
+function stringProgress(t){
+  return LINKS.map(l => {
+    const p = clamp((t-l.start)/l.dur);
+    return { ...l, to:l.b, p: l.snap ? easeSnap(p) : l.follow && !l.quick ? easeSine(p) : easeOut(p), done: t-l.start-l.dur };
+  });
+}
+
+function drawWorld(t, cam){
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.translate(W/2,H/2); ctx.rotate(cam.rot); ctx.scale(cam.z,cam.z); ctx.translate(-cam.x,-cam.y);
+  ctx.drawImage(STATIC, 0,0,STATIC.width,STATIC.height, 0,0,W,H);
+  // title card
+  ctx.save(); ctx.translate(960, 182); ctx.rotate(-.8*Math.PI/180);
+  ctx.scale(1.25,1.25); ctx.drawImage(TITLECARD.c, -TITLECARD.w/2, -TITLECARD.h/2, TITLECARD.w, TITLECARD.h); ctx.restore();
+  // strings sit behind the prints so they never cover a face
+  const SP = stringProgress(t);
+  SP.forEach(l => drawString(pt(l.a), pt(l.b), l.p, false));
+  EXTRA.forEach((E,j)=>{ const im = ILLUS[j];
+    ctx.save(); ctx.translate(E.x,E.y); ctx.rotate(E.rot*Math.PI/180);
+    ctx.shadowColor="rgba(0,0,0,.6)"; ctx.shadowBlur=16*cam.z; ctx.shadowOffsetX=5*cam.z; ctx.shadowOffsetY=10*cam.z;
+    ctx.drawImage(im.c, -im.w/2, -im.h/2, im.w, im.h); ctx.restore(); });
+  PHOTOS.forEach((P,i)=>{
+    const pr=PRINTS[i], tg=TAGS[i];
+    ctx.save(); ctx.translate(P.x,P.y); ctx.rotate(P.rot*Math.PI/180);
+    ctx.shadowColor="rgba(0,0,0,.6)"; ctx.shadowBlur=18*cam.z; ctx.shadowOffsetX=6*cam.z; ctx.shadowOffsetY=11*cam.z;
+    ctx.drawImage(pr.c, -pr.w/2, -pr.h/2, pr.w, pr.h);
+    ctx.restore();
+    const ty = P.y + pr.h/2 + 8 + tg.h/2;
+    ctx.save(); ctx.translate(P.x, ty); ctx.rotate((-P.rot*.6)*Math.PI/180);
+    ctx.shadowColor="rgba(0,0,0,.5)"; ctx.shadowBlur=10*cam.z; ctx.shadowOffsetX=3*cam.z; ctx.shadowOffsetY=6*cam.z;
+    ctx.drawImage(tg.c, -tg.w/2, -tg.h/2, tg.w, tg.h);
+    ctx.shadowColor="transparent"; ctx.fillStyle="rgba(235,225,190,.55)";
+    for (const sx of [-1,1]){ ctx.save(); ctx.translate(sx*(tg.w/2-6), -tg.h/2+4); ctx.rotate(sx*.5); ctx.fillRect(-22,-9,44,18); ctx.restore(); }
+    ctx.restore();
+  });
+  // pins glow briefly when a string arrives
+  const glow = i => Math.max(0, ...SP.filter(l=>l.to===i).map(l => l.done>0 && l.done<1 ? 1-l.done : 0));
+  drawPin(HUB.x, HUB.y, 0);
+  PHOTOS.forEach((_,i)=>{ const p=pinOf(i); drawPin(p.x,p.y,glow(i)); });
+  drawPin(LEGEND.x, LEGEND.y-58, 0);
+  EXTRA.forEach((_,j)=>{ const p=extraPin(j); drawPin(p.x,p.y,glow("x"+j)); });
+}
+
+const DUST = Array.from({length:90}, (_,i)=>{ const r=rnd(100+i); return { x:r()*W, y:r()*H, s:.6+r()*2.2, v:.15+r()*.5, ph:r()*6.28, a:.08+r()*.3 }; });
+
+function drawLight(t, cam){
+  ctx.setTransform(1,0,0,1,0,0);
+  let fl = 1 + Math.sin(t*7.3)*.015 + Math.sin(t*13.1)*.01;
+  if ((t%6.7) > 6.45) fl -= .12*Math.sin(((t%6.7)-6.45)/.25*Math.PI);
+  const final = cam.seg.focus===-2 ? ease(cam.p) : 0;
+  ctx.globalCompositeOperation="screen";
+  const bx = W*.6 + Math.sin(t*.2)*30;
+  const beam = ctx.createRadialGradient(bx, -120, 40, bx, H*.35, H*.95);
+  beam.addColorStop(0,`rgba(255,185,115,${.2*fl})`); beam.addColorStop(.5,`rgba(255,150,80,${.06*fl})`); beam.addColorStop(1,"rgba(0,0,0,0)");
+  ctx.fillStyle=beam; ctx.fillRect(0,0,W,H);
+  for (const d of DUST){
+    const x = (d.x + t*d.v*14 + Math.sin(t*.5+d.ph)*20) % W, y = (d.y + Math.sin(t*.3+d.ph)*30 + t*d.v*6) % H;
+    const inBeam = clamp(1 - Math.hypot((x-bx)/900, (y-H*.35)/700));
+    ctx.fillStyle=`rgba(255,220,170,${d.a*inBeam*fl})`; ctx.beginPath(); ctx.arc(x,y,d.s,0,7); ctx.fill();
+  }
+  ctx.globalCompositeOperation="source-over";
+  const vg = ctx.createRadialGradient(W*.52, H*.46, H*(.18-.06*final), W*.5, H*.5, H*1.02);
+  vg.addColorStop(0,"rgba(0,0,0,0)"); vg.addColorStop(.6,`rgba(0,0,0,${(.45+.15*final)/fl})`); vg.addColorStop(1,"rgba(0,0,0,.93)");
+  ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation="soft-light"; ctx.fillStyle="rgba(70,35,12,.35)"; ctx.fillRect(0,0,W,H);   // warm brown grade
+  ctx.globalCompositeOperation="overlay"; ctx.globalAlpha=.07; ctx.drawImage(NOISE[Math.floor(t*24)%NOISE.length],0,0,W,H);
+  ctx.globalAlpha=1; ctx.globalCompositeOperation="source-over";
+}
+
+// typing window for a caption that is up for `dur` seconds (shared by the picture and the key sounds)
+const typeWin = dur => ({ start:TIM.typeStart, len: TIM.typeDur || Math.min(TIM.typeMax, dur*.25) });
+
+function lowerThird(kicker, text, L, dur, top=false){
+  const f=TIM.capFade, a=clamp((L-f*.4)/f)*clamp((dur-L)/f);
+  if (a<=0) return;
+  const tw = typeWin(dur), shown = text.slice(0, Math.ceil(text.length*clamp((L-tw.start)/tw.len)));
+  ctx.save(); ctx.globalAlpha=a;
+  const x=W-110, y=top ? 150 : H-150;
+  const lg=ctx.createLinearGradient(W,0,W-820,0); lg.addColorStop(0,"rgba(0,0,0,.9)"); lg.addColorStop(.6,"rgba(0,0,0,.7)"); lg.addColorStop(1,"rgba(0,0,0,0)");
+  ctx.fillStyle=lg; ctx.fillRect(W-820, y-62, 820, 120);
+  ctx.fillStyle="#9e1a20"; ctx.fillRect(x+16, y-50, 5, 92);
+  ctx.textAlign="right"; ctx.fillStyle="#cf5a54"; ctx.font="700 22px Cairo"; ctx.fillText(kicker, x, y-20);
+  ctx.fillStyle="#f4ecdb"; ctx.font="900 48px Cairo"; ctx.fillText(shown + ((L*2|0)%2 && shown.length<text.length ? "▌" : ""), x, y+32);
+  ctx.restore();
+}
+
+function drawOverlay(t, cam){
+  ctx.setTransform(1,0,0,1,0,0); ctx.direction="rtl";
+  const s = cam.seg;
+  const ti=TIM.titleIn, to=TIM.titleOut, ta = clamp((t-ti[0])/(ti[1]-ti[0]))*clamp((to[1]-t)/(to[1]-to[0]));
+  if (ta>0){
+    ctx.fillStyle=`rgba(0,0,0,${.55*ta})`; ctx.fillRect(0,0,W,H);
+    ctx.save(); ctx.globalAlpha=ta; ctx.textAlign="center"; ctx.shadowColor="rgba(0,0,0,.9)"; ctx.shadowBlur=30;
+    ctx.fillStyle="#efe6d2"; ctx.font="700 92px 'Reem Kufi', Cairo"; ctx.fillText(caseTitle, W/2, H/2+10);
+    ctx.fillStyle="#b8343a"; ctx.font="700 26px Cairo"; ctx.fillText("لوحة التحقيق", W/2, H/2+62);
+    ctx.restore();
+  }
+  const cap = CAPS.find(c => t>=c.t0 && t<c.t1);
+  if (cap) lowerThird(exhibitLabel(cap.i), names[cap.i], t-cap.t0, cap.t1-cap.t0);
+  const fade = Math.max(clamp(1 - t/TIM.fadeIn), clamp((t-(TL-TIM.fadeOut))/TIM.fadeOut));
+  if (fade>0){ ctx.fillStyle=`rgba(0,0,0,${fade})`; ctx.fillRect(0,0,W,H); }
+  ctx.fillStyle="#000"; ctx.fillRect(0,0,W,34); ctx.fillRect(0,H-34,W,34);
+}
+
+function render(t){
+  const cam = camAt(t);
+  ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle="#000"; ctx.fillRect(0,0,W,H);
+  drawWorld(t, cam); drawAgent(t, cam); drawLight(t, cam); drawOverlay(t, cam);
+}
+
+// ---------- sound design ----------
+// Everything is synthesised and scheduled on the timeline, so the same code drives live playback,
+// the recorded video and the offline WAV export. It stays low and dark on purpose: most energy sits
+// under 400 Hz, and a wide dip around 1–4 kHz leaves the speech band free for the voice-over.
+const soundOn = () => document.getElementById("snd").checked;
+const soundVol = () => document.getElementById("vol").value / 100;
+
+function noiseBuffer(ac, secs, brown){
+  const b = ac.createBuffer(1, ac.sampleRate*secs, ac.sampleRate), d = b.getChannelData(0), r = rnd(99);
+  let last = 0;
+  for (let i=0;i<d.length;i++){ const w = r()*2-1; if (brown){ last = (last + .02*w)/1.02; d[i] = last*3.5; } else d[i] = w; }
+  return b;
+}
+function impulse(ac, secs){
+  const len = ac.sampleRate*secs, b = ac.createBuffer(2, len, ac.sampleRate), r = rnd(5);
+  for (let c=0;c<2;c++){ const d=b.getChannelData(c); for (let i=0;i<len;i++) d[i]=(r()*2-1)*Math.pow(1-i/len, 3); }
+  return b;
+}
+
+function buildSound(ac, out, t0, vol){
+  const T = s => t0 + s, V = soundOn() ? vol * .9 : 0;
+  // final mix -> safety limiter -> output (the voice-over arrives near 0 dBFS, so this stops any clipping)
+  const mix = ac.createGain(), lim = ac.createDynamicsCompressor();
+  lim.threshold.value=-3; lim.knee.value=0; lim.ratio.value=20; lim.attack.value=.002; lim.release.value=.12;
+  mix.connect(lim); lim.connect(out);
+  const master = ac.createGain(), duck = ac.createGain(); duck.connect(master); master.connect(mix);
+  master.gain.setValueAtTime(0, T(0)); master.gain.linearRampToValueAtTime(V, T(Math.max(.3, TIM.fadeIn*1.3)));
+  master.gain.setValueAtTime(V, T(TL-TIM.fadeOut*1.1)); master.gain.linearRampToValueAtTime(0, T(TL));
+  // voice-over pocket + gentle top-end roll-off
+  const dip = ac.createBiquadFilter(); dip.type="peaking"; dip.frequency.value=2200; dip.Q.value=.6; dip.gain.value=-9;
+  const shelf = ac.createBiquadFilter(); shelf.type="highshelf"; shelf.frequency.value=6000; shelf.gain.value=-6;
+  dip.connect(shelf); shelf.connect(duck);
+  addVoice(ac, mix, T, duck);
+  const bus = dip;
+  const verb = ac.createConvolver(); verb.buffer = impulse(ac, 3.2);
+  const wet = ac.createGain(); wet.gain.value = .35; verb.connect(wet); wet.connect(bus);
+  const WN = noiseBuffer(ac, 2, false), BN = noiseBuffer(ac, 4, true);
+
+  // 1. dark drone bed (A minor), slowly breathing filter
+  const dLP = ac.createBiquadFilter(); dLP.type="lowpass"; dLP.frequency.value=340; dLP.Q.value=.7;
+  const dG = ac.createGain(); dG.gain.value=.11; dLP.connect(dG); dG.connect(bus); dG.connect(verb);
+  [[55,"sine",.9,0],[55.4,"triangle",.35,0],[82.41,"sine",.45,-4],[110,"triangle",.12,3]].forEach(([f,type,g,det])=>{
+    const o=ac.createOscillator(), og=ac.createGain(); o.type=type; o.frequency.value=f; o.detune.value=det; og.gain.value=g;
+    o.connect(og); og.connect(dLP); o.start(T(0)); o.stop(T(TL+.1)); });
+  const lfo=ac.createOscillator(), lfoG=ac.createGain(); lfo.frequency.value=.06; lfoG.gain.value=110; lfo.connect(lfoG); lfoG.connect(dLP.frequency); lfo.start(T(0)); lfo.stop(T(TL+.1));
+
+  // 2. room tone: very soft brown noise
+  const room=ac.createBufferSource(); room.buffer=BN; room.loop=true;
+  const rLP=ac.createBiquadFilter(); rLP.type="lowpass"; rLP.frequency.value=260;
+  const rG=ac.createGain(); rG.gain.value=.05; room.connect(rLP); rLP.connect(rG); rG.connect(bus); room.start(T(0)); room.stop(T(TL+.1));
+
+  // 3. sparse, low, muffled piano-like notes for the "investigation" mood
+  const notes=[110,130.81,98,82.41,146.83,110,123.47,98,82.41,130.81,110,73.42];
+  const short = TL<20;
+  for (let k=0, s=short?.4:2.2; s<TL-(short?1.5:3); k++, s+=short?2.6:3.6){
+    const f=notes[k%notes.length], g=ac.createGain(), lp=ac.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=700;
+    g.gain.setValueAtTime(0,T(s)); g.gain.linearRampToValueAtTime(.07,T(s+.02)); g.gain.exponentialRampToValueAtTime(.0005,T(s+3.4));
+    [[1,"triangle",1],[2,"sine",.25]].forEach(([m,type,a])=>{ const o=ac.createOscillator(), oa=ac.createGain(); o.type=type; o.frequency.value=f*m; oa.gain.value=a;
+      o.connect(oa); oa.connect(lp); o.start(T(s)); o.stop(T(s+3.5)); });
+    lp.connect(g); g.connect(bus); g.connect(verb);
+  }
+
+  // 4. soft low "whoosh" on every camera move
+  SEQ.filter(s=>s.k==="m").forEach(s=>{
+    const n=ac.createBufferSource(); n.buffer=BN; n.loop=true;
+    const bp=ac.createBiquadFilter(); bp.type="bandpass"; bp.Q.value=1.1;
+    bp.frequency.setValueAtTime(160,T(s.t0)); bp.frequency.linearRampToValueAtTime(520,T(s.t0+s.dur*.5)); bp.frequency.linearRampToValueAtTime(170,T(s.t0+s.dur));
+    const g=ac.createGain(); g.gain.setValueAtTime(0,T(s.t0)); g.gain.linearRampToValueAtTime(.16,T(s.t0+s.dur*.5)); g.gain.linearRampToValueAtTime(0,T(s.t0+s.dur));
+    n.connect(bp); bp.connect(g); g.connect(bus); g.connect(verb); n.start(T(s.t0)); n.stop(T(s.t0+s.dur+.05));
+  });
+
+  // 5. pin "thock" when a red string reaches its photo (panned to where the photo is)
+  LINKS.forEach(l=>{
+    const at=T(l.start+l.dur), x=pt(l.b).x, pan=ac.createStereoPanner(); pan.pan.value=clamp((x-960)/960*.5,-1,1);
+    const o=ac.createOscillator(), g=ac.createGain(); o.type="sine";
+    o.frequency.setValueAtTime(150,at); o.frequency.exponentialRampToValueAtTime(55,at+.14);
+    g.gain.setValueAtTime(0,at); g.gain.linearRampToValueAtTime(.22,at+.005); g.gain.exponentialRampToValueAtTime(.0005,at+.3);
+    o.connect(g); g.connect(pan); pan.connect(bus); pan.connect(verb); o.start(at); o.stop(at+.32);
+  });
+
+  // 6. keyboard typing, one key per letter exactly as the name types on screen
+  const key = (at, r, accent) => {
+    const n=ac.createBufferSource(); n.buffer=WN; n.playbackRate.value=.8+r()*.4;
+    const hp=ac.createBiquadFilter(); hp.type="bandpass"; hp.frequency.value=3200+r()*1400; hp.Q.value=1.4;
+    const g=ac.createGain(), a=(accent?.11:.075)*(.75+r()*.5);
+    g.gain.setValueAtTime(0,at); g.gain.linearRampToValueAtTime(a,at+.002); g.gain.exponentialRampToValueAtTime(.0003,at+.035);
+    const o=ac.createOscillator(), og=ac.createGain(); o.type="sine"; o.frequency.value=160+r()*40;
+    og.gain.setValueAtTime(0,at); og.gain.linearRampToValueAtTime(.09,at+.003); og.gain.exponentialRampToValueAtTime(.0003,at+.05);
+    const pan=ac.createStereoPanner(); pan.pan.value=.25;           // the caption sits on the right
+    n.connect(hp); hp.connect(g); g.connect(pan); o.connect(og); og.connect(pan); pan.connect(bus);
+    n.start(at); n.stop(at+.05); o.start(at); o.stop(at+.06);
+  };
+  CAPS.forEach(c=>{
+    const txt=names[c.i], n=txt.length, r=rnd(17+c.i), tw=typeWin(c.t1-c.t0);
+    for (let k=1;k<=n;k++){ if (txt[k-1]===" ") continue; key(T(c.t0+tw.start+tw.len*(k-1)/n + (r()-.5)*.008), r, false); }
+    key(T(c.t0+tw.start+tw.len+.06), r, true);                              // final "return"
+  });
+
+  // 7. low impacts: under the opening title and the final reveal
+  [[TIM.titleIn[0],.32],[SEQ.find(s=>s.focus===-2).t0, .26]].forEach(([s,a])=>{
+    const at=T(s), o=ac.createOscillator(), g=ac.createGain(); o.type="sine";
+    o.frequency.setValueAtTime(70,at); o.frequency.exponentialRampToValueAtTime(32,at+1.8);
+    g.gain.setValueAtTime(0,at); g.gain.linearRampToValueAtTime(a,at+.02); g.gain.exponentialRampToValueAtTime(.0005,at+2.6);
+    o.connect(g); g.connect(bus); g.connect(verb); o.start(at); o.stop(at+2.7);
+  });
+  return mix;
+}
+
+// ---------- voice-over ----------
+let VOBUF = null;
+const voOn = () => !!VOBUF && document.getElementById("vo").checked;
+const voStart = () => Math.max(0, +document.getElementById("voStart").value || 0);
+const voVol = () => document.getElementById("voVol").value / 100;
+const anySound = () => soundOn() || voOn();
+
+function addVoice(ac, mix, T, duck){
+  duck.gain.setValueAtTime(1, T(0));
+  if (!voOn()) return;
+  const s0 = voStart();
+  const src = ac.createBufferSource(); src.buffer = VOBUF;
+  // light speech chain: cut rumble, even out the level, then set the voice level
+  const hp = ac.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=80;
+  const comp = ac.createDynamicsCompressor(); comp.threshold.value=-20; comp.knee.value=8; comp.ratio.value=3; comp.attack.value=.005; comp.release.value=.2;
+  const g = ac.createGain(); g.gain.value = .9 * voVol();
+  src.connect(hp); hp.connect(comp); comp.connect(g); g.connect(mix);
+  src.start(T(s0));
+  // ducking: lower the music bed by ~9 dB while the voice is speaking, ease back in the pauses
+  const d = VOBUF.getChannelData(0), sr = VOBUF.sampleRate, win = Math.round(sr*.05);
+  let active = false, quiet = 0;
+  for (let i=0, w=0; i<d.length; i+=win, w++){
+    let e=0; for (let j=i; j<Math.min(i+win,d.length); j++) e+=d[j]*d[j];
+    const loud = 10*Math.log10(e/win + 1e-12) > -38, at = T(s0 + w*.05);
+    if (loud){ quiet = 0; if (!active){ active = true; duck.gain.setTargetAtTime(.35, Math.max(T(0), at-.12), .06); } }
+    else if (active && ++quiet >= 8){ active = false; duck.gain.setTargetAtTime(1, at, .35); }
+  }
+  if (active) duck.gain.setTargetAtTime(1, T(s0 + VOBUF.duration), .35);
+}
+
+// WSOLA time-stretch: changes the speed of the voice without changing its pitch.
+// Each 40 ms grain is taken near where the speed says it should be, nudged (±12 ms) to the spot
+// that best lines up with the previous grain's natural continuation, then overlap-added.
+function stretch(buf, speed){
+  if (Math.abs(speed-1) < .001) return buf;
+  const sr = buf.sampleRate, N = Math.round(sr*.04) & ~1, Hs = N/2, Ha = Hs*speed, tol = Math.round(sr*.012);
+  const len = buf.length, outLen = Math.ceil(len/speed) + N, chs = buf.numberOfChannels;
+  const inp = [...Array(chs)].map((_,c)=>buf.getChannelData(c)), mono = new Float32Array(len);
+  for (let c=0;c<chs;c++) for (let i=0;i<len;i++) mono[i] += inp[c][i]/chs;
+  const win = new Float32Array(N); for (let i=0;i<N;i++) win[i] = .5 - .5*Math.cos(2*Math.PI*i/N);
+  const out = [...Array(chs)].map(()=>new Float32Array(outLen));
+  let prev = 0;
+  for (let k=0; ; k++){
+    const target = Math.round(k*Ha), o = k*Hs;
+    if (target + N >= len || o + N >= outLen) break;
+    let pos = target;
+    if (k>0){
+      const nat = prev + Hs; let best = -Infinity;
+      for (let dlt=-tol; dlt<=tol; dlt+=2){
+        const p = target + dlt; if (p<0 || p+N>=len) continue;
+        let s = 0; for (let i=0;i<N;i+=4) s += mono[p+i]*mono[nat+i];
+        if (s > best){ best = s; pos = p; }
+      }
+    }
+    for (let c=0;c<chs;c++){ const a=inp[c], b=out[c]; for (let i=0;i<N;i++) b[o+i] += a[pos+i]*win[i]; }
+    prev = pos;
+  }
+  const res = new AudioBuffer({ length:outLen, numberOfChannels:chs, sampleRate:sr });
+  out.forEach((d,c)=>res.copyToChannel(d,c));
+  return res;
+}
+
+let VORAW = null;
+const voRate = () => +document.getElementById("voRate").value || 1;
+function applyVoiceRate(){
+  if (!VORAW) return;
+  VOBUF = stretch(VORAW, voRate());
+  document.getElementById("voRateLbl").textContent = "×" + voRate().toFixed(2);
+  document.getElementById("voLen").textContent = "(" + (VORAW.duration/voRate()).toFixed(1) + " ث)";
+}
+
+async function loadVoice(){
+  if (!VO_SRC){ document.getElementById("voBox").style.display = "none"; return; }
+  try {
+    // decode the embedded base64 directly: fetch() of a data: URL is blocked in some viewers
+    const bin = atob(VO_SRC.slice(VO_SRC.indexOf(",")+1)), ab = new Uint8Array(bin.length);
+    for (let i=0;i<bin.length;i++) ab[i] = bin.charCodeAt(i);
+    VORAW = await new OfflineAudioContext(2, 48000, 48000).decodeAudioData(ab.buffer);
+    applyVoiceRate();
+  } catch(e){ document.getElementById("voBox").style.display = "none"; status("تعذّر تحميل التعليق الصوتي"); }
+}
+
+let AC=null, ACdest=null, curMaster=null;
+function startAudio(){
+  if (!AC){ AC=new (window.AudioContext||window.webkitAudioContext)(); ACdest=AC.createMediaStreamDestination(); }
+  AC.resume();
+  if (curMaster){ const m=curMaster; m.gain.cancelScheduledValues(AC.currentTime); m.gain.setTargetAtTime(0,AC.currentTime,.05); setTimeout(()=>m.disconnect(),400); curMaster=null; }
+  const t0 = AC.currentTime + .15;
+  if (anySound()){ const out=AC.createGain(); out.connect(AC.destination); out.connect(ACdest); curMaster=buildSound(AC, out, t0, soundVol()); }
+  return t0;
+}
+
+function encodeWav(buf){
+  const ch=buf.numberOfChannels, len=buf.length, sr=buf.sampleRate, data=new DataView(new ArrayBuffer(44+len*ch*2));
+  const w=(o,s)=>{ for (let i=0;i<s.length;i++) data.setUint8(o+i,s.charCodeAt(i)); };
+  w(0,"RIFF"); data.setUint32(4,36+len*ch*2,true); w(8,"WAVEfmt "); data.setUint32(16,16,true); data.setUint16(20,1,true);
+  data.setUint16(22,ch,true); data.setUint32(24,sr,true); data.setUint32(28,sr*ch*2,true); data.setUint16(32,ch*2,true); data.setUint16(34,16,true);
+  w(36,"data"); data.setUint32(40,len*ch*2,true);
+  const chans=[...Array(ch)].map((_,c)=>buf.getChannelData(c));
+  for (let i=0,o=44;i<len;i++) for (let c=0;c<ch;c++,o+=2){ const v=Math.max(-1,Math.min(1,chans[c][i])); data.setInt16(o, v<0?v*0x8000:v*0x7fff, true); }
+  return new Blob([data],{type:"audio/wav"});
+}
+async function renderSoundtrack(){
+  const sr=48000, oac=new OfflineAudioContext(2, Math.ceil(sr*(TL+.5)), sr);
+  buildSound(oac, oac.destination, 0, soundVol());
+  return oac.startRendering();
+}
+async function exportWav(){
+  setBusy(true); status("جارٍ إنشاء ملف الصوت…");
+  const buf = await renderSoundtrack();
+  download(encodeWav(buf), "detective-board-soundtrack.wav");
+  setBusy(false); status("تم تنزيل الصوت ✓ — ضعه تحت التعليق الصوتي في برنامج المونتاج");
+}
+
+// ---------- playback / recording / stills ----------
+let start=null, playing=false, recorder=null;
+function loop(){
+  if (!playing) return;
+  const t=Math.max(0, AC.currentTime-start);           // audio clock drives the picture, so sound stays in sync
+  render(Math.min(t,TL));
+  if (t<TL) requestAnimationFrame(loop); else finish();
+}
+function play(){ start=startAudio(); playing=true; requestAnimationFrame(loop); }
+function finish(){ playing=false; if (recorder && recorder.state==="recording") recorder.stop(); }
+const status = m => document.getElementById("status").textContent = m;
+function setBusy(b){ ["play","rec","stills","wav","mp4"].forEach(id=>document.getElementById(id).disabled=b); }
+function download(blob, name){ const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 4000); }
+
+function record(){
+  const types=["video/mp4;codecs=avc1.640028,mp4a.40.2","video/mp4;codecs=avc1.640028","video/mp4","video/webm;codecs=vp9,opus","video/webm"];
+  const type=types.find(t=>window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+  if (!type){ status("المتصفح لا يدعم التسجيل. استخدم Chrome أو Edge."); return; }
+  if (!AC){ AC=new (window.AudioContext||window.webkitAudioContext)(); ACdest=AC.createMediaStreamDestination(); }
+  const chunks=[], stream=new MediaStream([...cv.captureStream(30).getVideoTracks(), ...(anySound() ? ACdest.stream.getAudioTracks() : [])]);
+  recorder=new MediaRecorder(stream,{ mimeType:type, videoBitsPerSecond:14e6 });
+  recorder.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+  recorder.onstop=()=>{
+    const blob=new Blob(chunks,{type}); download(blob, "detective-board."+(type.includes("mp4")?"mp4":"webm"));
+    document.body.classList.remove("recording","hidden"); setBusy(false); status("تم التنزيل ✓ ("+(blob.size/1e6).toFixed(1)+" MB)");
+  };
+  document.body.classList.add("recording","hidden"); setBusy(true);
+  status("جارٍ التسجيل… أبقِ هذه النافذة ظاهرة ("+Math.round(TL)+" ثانية)");
+  recorder.start(250); play();
+}
+
+// ---------- frame-accurate MP4 export (WebCodecs H.264 + AAC, muxed with mp4-muxer) ----------
+// Renders every frame at its exact time instead of recording in real time, so nothing can stutter.
+function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement("script"); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
+
+async function saveToFolder(blob, name){
+  // when served by serve.ps1 (localhost) the file is written straight into the project's output\ folder
+  if (!/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return false;
+  try { const r = await fetch("/save/" + encodeURIComponent(name), { method:"POST", body:blob }); return r.ok; } catch(e){ return false; }
+}
+
+async function exportMp4(){
+  setBusy(true);
+  try {
+    if (!window.Mp4Muxer) await loadScript("https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.min.js");
+    const fps = 30, frames = Math.ceil(TL*fps), withAudio = anySound();
+    const muxer = new Mp4Muxer.Muxer({ target:new Mp4Muxer.ArrayBufferTarget(), fastStart:"in-memory",
+      video:{ codec:"avc", width:W, height:H, frameRate:fps },
+      ...(withAudio ? { audio:{ codec:"aac", numberOfChannels:2, sampleRate:48000 } } : {}) });
+    let err = null;
+    const venc = new VideoEncoder({ output:(c,m)=>muxer.addVideoChunk(c,m), error:e=>err=e });
+    venc.configure({ codec:"avc1.640028", width:W, height:H, bitrate:14e6, framerate:fps });
+    for (let i=0;i<frames;i++){
+      if (err) throw err;
+      render(Math.min(i/fps, TL));
+      const f = new VideoFrame(cv, { timestamp:Math.round(i*1e6/fps), duration:Math.round(1e6/fps) });
+      venc.encode(f, { keyFrame: i%fps===0 }); f.close();
+      while (venc.encodeQueueSize > 6) await new Promise(r=>setTimeout(r,2));
+      if (i%15===0){ status(`جارٍ إنشاء الفيديو… ${Math.round(100*i/frames)}٪`); await new Promise(r=>setTimeout(r,0)); }
+    }
+    await venc.flush();
+    if (withAudio){
+      status("جارٍ إضافة الصوت…");
+      const buf = await renderSoundtrack(), n = Math.min(buf.length, Math.round(TL*48000));
+      const aenc = new AudioEncoder({ output:(c,m)=>muxer.addAudioChunk(c,m), error:e=>err=e });
+      aenc.configure({ codec:"mp4a.40.2", sampleRate:48000, numberOfChannels:2, bitrate:192000 });
+      const L = buf.getChannelData(0), R = buf.getChannelData(1);
+      for (let s=0; s<n; s+=1024){
+        const len = Math.min(1024, n-s), data = new Float32Array(len*2);
+        data.set(L.subarray(s,s+len),0); data.set(R.subarray(s,s+len),len);
+        const ad = new AudioData({ format:"f32-planar", sampleRate:48000, numberOfFrames:len, numberOfChannels:2, timestamp:Math.round(s*1e6/48000), data });
+        aenc.encode(ad); ad.close();
+      }
+      await aenc.flush();
+      if (err) throw err;
+    }
+    muxer.finalize();
+    const blob = new Blob([muxer.target.buffer], { type:"video/mp4" }), name = "detective-board.mp4";
+    const saved = await saveToFolder(blob, name);
+    if (!saved) download(blob, name);
+    status((saved ? "تم الحفظ في مجلد المشروع: output\\" : "تم التنزيل: ") + name + " (" + (blob.size/1e6).toFixed(1) + " MB) ✓");
+    window.__lastExport = { saved, size:blob.size, frames, withAudio };
+  } catch(e){ status("تعذّر إنشاء الفيديو: " + e.message); window.__lastExport = { error:String(e) }; }
+  render(TL-.8); setBusy(false);
+}
+
+async function exportStills(){
+  setBusy(true);
+  for (const [k,s] of SHOTS.entries()){
+    render(s.t);
+    const blob = await new Promise(r=>cv.toBlob(r,"image/png"));
+    download(blob, `shot-${s.label}.png`); status(`لقطة ${k+1} من ${SHOTS.length}`);
+    await new Promise(r=>setTimeout(r,400));
+  }
+  setBusy(false); status("تم تصدير "+SHOTS.length+" لقطات ✓");
+}
+
+// ---------- UI ----------
+function rebuild(){ assignSlots(); PRINTS=PHOTOS.map(p=>makePrint(IM[p.img], p.h)); TAGS=PHOTOS.map((_,i)=>makeTag(i)); TITLECARD=makeTitleCard(); ILLUS=EXTRA.map(e=>makeIllus(e.kind)); buildTimeline(); window.__TL=TL; window.__SHOTS=SHOTS; }
+function previewFocus(i){ const c=CAPS.find(c=>c.i===i); render(c ? c.t0+(c.t1-c.t0)*.8 : TL-2.5); }
+
+function buildUI(){
+  const box=document.getElementById("names"), ti=document.getElementById("title");
+  ti.value = caseTitle===DEFAULT_TITLE ? "" : caseTitle;
+  ti.oninput=()=>{ caseTitle=ti.value.trim()||DEFAULT_TITLE; TITLECARD=makeTitleCard(); save(); if(!playing) render(TL-2.5); };
+  VISIT.forEach(i=>{
+    const l=document.createElement("label"); l.innerHTML=`<span>${AR(num(i))}</span>`;
+    const inp=document.createElement("input"); inp.value = names[i]===DEFAULT_NAMES[i] ? "" : names[i];
+    inp.placeholder="اسم الشخصية رقم "+AR(num(i)) + (i===mainIdx ? " (الصورة الوسطى)" : "");
+    inp.oninput=()=>{ names[i]=inp.value.trim()||DEFAULT_NAMES[i]; TAGS[i]=makeTag(i); save(); if(!playing) previewFocus(i); };
+    l.appendChild(inp); box.appendChild(l);
+  });
+  document.getElementById("play").onclick=()=>{ document.body.classList.add("hidden"); play(); };
+  document.getElementById("rec").onclick=record;
+  document.getElementById("stills").onclick=exportStills;
+  document.getElementById("wav").onclick=exportWav;
+  document.getElementById("mp4").onclick=exportMp4;
+  const retime=()=>{ buildTimeline(); window.__TL=TL; window.__SHOTS=SHOTS; if(!playing) render(TL-.8); status("مدة الفيديو: "+TL.toFixed(1)+" ثانية"); };
+  document.getElementById("vo").onchange=retime; document.getElementById("voStart").oninput=retime;
+  const rate=document.getElementById("voRate");
+  rate.oninput=()=>{ document.getElementById("voRateLbl").textContent="×"+voRate().toFixed(2); };
+  rate.onchange=()=>{ status("جارٍ ضبط سرعة الصوت…"); setTimeout(()=>{ applyVoiceRate(); retime(); }, 20); };
+  document.getElementById("hide").onclick=()=>document.body.classList.add("hidden");
+  document.getElementById("show").onclick=()=>document.body.classList.remove("hidden");
+  addEventListener("keydown",e=>{ if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT") return;
+    if(e.key==="h"||e.key==="H") document.body.classList.toggle("hidden");
+    if(e.key===" "){ e.preventDefault(); play(); } });
+}
+
+(async function init(){
+  const fontsReady = Promise.all(["700 30px Cairo","900 30px Cairo","400 16px Cairo","700 30px 'Reem Kufi'","700 30px 'Aref Ruqaa'"].map(f=>document.fonts.load(f)));
+  await Promise.race([fontsReady, new Promise(r=>setTimeout(r,2500))]);
+  for (const k of Object.keys(SRC)) IM[k]=await loadImg(SRC[k]);
+  await loadVoice();
+  STATIC=buildStatic(); makeNoise(); rebuild(); buildUI();
+  render(TL-2.5);
+  window.__render=render;
+})();
+</script>
+</body>
+</html>
