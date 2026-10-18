@@ -75,7 +75,7 @@ const DEFAULT_NAMES = ["الاسم غير محدد","الاسم غير محدد"
 const DEFAULT_TITLE = "ملف القضية";
 const PRESET_TITLE = "11 سبتمبر";
 // names[photo index] — photo 1 is the centre photo (character 5); see VISIT below
-const PRESET_NAMES = DEFAULT_NAMES.slice();     // names are typed in the panel
+const PRESET_NAMES = ["مروان الشحي","فايز أحمد","مهند الشهري","حمزة الغامدي","أحمد الغامدي"];   // names[photo index], same as the order in the voice-over
 const AR = n => String(n).padStart(2,"0").replace(/\d/g, d => "٠١٢٣٤٥٦٧٨٩"[d]);
 
 const W = 1920, H = 1080, S = 2.2;
@@ -102,10 +102,10 @@ const mainIdx = VISIT[VISIT.length-1];
 
 let names = PRESET_NAMES.slice(), caseTitle = PRESET_TITLE;
 try {
-  const s = JSON.parse(localStorage.getItem("board2-v2") || "null");
+  const s = JSON.parse(localStorage.getItem("board2-v3") || "null");
   if (s) { if (Array.isArray(s.names) && s.names.length===5) names = s.names; caseTitle = s.title || PRESET_TITLE; }
 } catch(e) {}
-const save = () => { try { localStorage.setItem("board2-v2", JSON.stringify({ names, title:caseTitle })); } catch(e) {} };
+const save = () => { try { localStorage.setItem("board2-v3", JSON.stringify({ names, title:caseTitle })); } catch(e) {} };
 
 // photo i (0..4, order sent) -> slot
 let PHOTOS = [];
