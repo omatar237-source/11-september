@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>رادار UAL175</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  html,body { margin:0; height:100%; background:#000; overflow:hidden; font-family:Cairo, sans-serif; }
+  #stage { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { width:min(100vw, calc(100vh * 16 / 9)); height:auto; aspect-ratio:16/9; display:block; background:#000; }
+  #play { position:fixed; bottom:16px; right:16px; z-index:2; background:#0c2a14; color:#9dffb0; border:1px solid #2f7a44; border-radius:6px; padding:8px 16px; font:inherit; cursor:pointer; }
+  body.playing #play { display:none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<button id="play">▶ تشغيل</button>
+<script>
+// Air-traffic radar scene: UAL175's data block drops off the scope (08:47 EDT).
+// render(t) draws any moment, so the same code drives playback and frame-exact export.
+const W = 1920, H = 1080, TL = 12;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const C = { x:960, y:560 }, R = 470;                 // scope centre and radius
+const SWEEP = 3.0;                                   // seconds per sweep revolution
+const T_OFF = 5.6;                                   // transponder switched off
+const clamp = (v,a=0,b=1) => Math.max(a, Math.min(b, v));
+const ease = t => t<.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+function rnd(seed){ let s=seed; return () => (s = (s*16807) % 2147483647) / 2147483647; }
+
+// targets: position at t (scope coords), callsign, altitude
+// UAL175 flies straight, then banks through a wide ~120° turn (T_TURN .. T_TURN+TURN_DUR)
+const AA = { x0:180, y0:90, speed:24, h0:Math.atan2(-5,-17), turn:120*Math.PI/180 };
+const T_TURN = 2.4, TURN_DUR = 3.4;
+const aaHeading = t => AA.h0 + AA.turn*ease(clamp((t-T_TURN)/TURN_DUR));
+function aaPos(t){
+  if (t <= T_TURN) return { x:AA.x0 + Math.cos(AA.h0)*AA.speed*t, y:AA.y0 + Math.sin(AA.h0)*AA.speed*t };
+  let p = aaPos(T_TURN);                                  // integrate through the turn in small steps
+  for (let s=T_TURN, dt=.05; s<t; s+=dt){ const h = aaHeading(Math.min(s+dt/2, t)), d = Math.min(dt, t-s)*AA.speed; p = { x:p.x+Math.cos(h)*d, y:p.y+Math.sin(h)*d }; }
+  return p;
+}
+const OTHERS = [
+  { x0:-300, y0:180, vx:14, vy:-6, cs:"USA583", alt:"240", type:"B737" },
+  { x0:120,  y0:300, vx:-6, vy:-15, cs:"DAL1989", alt:"330", type:"B767" },
+  { x0:-120, y0:-280, vx:12, vy:9,  cs:"AAL1871", alt:"280", type:"MD80" },
+  { x0:330,  y0:220, vx:-15, vy:3,  cs:"COA42",  alt:"180", type:"B757" },
+];
+const BLIPS = Array.from({length:26}, (_,i)=>{ const r=rnd(40+i), a=r()*6.283, d=60+r()*390; return { x:Math.cos(a)*d, y:Math.sin(a)*d, s:.6+r()*.8 }; });
+// stylised map lines (coast / airways)
+const MAP = [
+  [[-470,120],[-380,90],[-300,140],[-220,110],[-160,170],[-60,150],[20,210],[120,190],[200,250],[300,230],[380,300]],
+  [[-200,-430],[-120,-300],[-40,-180],[60,-60],[140,60],[220,180]],
+  [[-450,-120],[-250,-80],[-40,-40],[180,0],[420,40]],
+];
+
+// angle of the sweep at time t, and when it last passed angle a
+const sweepAng = t => (t/SWEEP)*Math.PI*2 - Math.PI/2;
+function lastHit(t, x, y){
+  const a = Math.atan2(y, x), s = sweepAng(t);
+  let d = (s - a) % (Math.PI*2); if (d<0) d += Math.PI*2;
+  return t - d/(Math.PI*2)*SWEEP;                    // time the beam last crossed this point
+}
+
+function camAt(t){
+  // static wide view, then a slow push in on UAL175 once its data block is gone
+  const p = ease(clamp((t - (T_OFF+.6)) / 4.2)), a = aaPos(t);
+  const z = 1 + 1.15*p, x = C.x + a.x*p*.85, y = C.y + a.y*p*.85;
+  return { z, x, y, rot:Math.sin(t*.4)*.002 };
+}
+
+function glowText(txt, x, y, size, col, a){
+  ctx.font = `700 ${size}px "DejaVu Sans Mono", Consolas, monospace`;
+  ctx.globalAlpha = a; ctx.shadowColor = col; ctx.shadowBlur = 10; ctx.fillStyle = col;
+  ctx.fillText(txt, x, y); ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+}
+
+function drawTarget(t, x, y, block, alpha, primaryOnly){
+  const hit = lastHit(t, x, y), age = t - hit;
+  const fade = hit < 0 ? .35 : clamp(1 - age/SWEEP*.75, .25, 1);   // refreshes as the beam passes
+  // history trail
+  for (let k=1;k<=5;k++){ const o = block.prev(k); ctx.fillStyle=`rgba(80,255,130,${.22*(1-k/6)*alpha})`; ctx.fillRect(C.x+o.x-2, C.y+o.y-2, 4, 4); }
+  ctx.save(); ctx.translate(C.x+x, C.y+y);
+  ctx.shadowColor="#5dff8c"; ctx.shadowBlur=12;
+  if (primaryOnly){ ctx.fillStyle=`rgba(120,255,160,${fade*alpha})`; ctx.beginPath(); ctx.arc(0,0,3.2,0,7); ctx.fill(); }
+  else {
+    ctx.strokeStyle=`rgba(150,255,180,${fade*alpha})`; ctx.lineWidth=2.4;
+    ctx.beginPath(); ctx.moveTo(-7,7); ctx.lineTo(7,-7); ctx.stroke();               // beacon slash
+    ctx.beginPath(); ctx.moveTo(8,-8); ctx.lineTo(30,-30); ctx.stroke();             // leader line
+  }
+  ctx.restore();
+  return fade;
+}
+
+function render(t){
+  const cam = camAt(t);
+  ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle="#000"; ctx.fillRect(0,0,W,H);
+  ctx.save();
+  ctx.translate(W/2,H/2); ctx.rotate(cam.rot); ctx.scale(cam.z,cam.z); ctx.translate(-cam.x,-cam.y);
+  ctx.direction="ltr"; ctx.textAlign="left";
+
+  // scope face
+  const face = ctx.createRadialGradient(C.x,C.y,10,C.x,C.y,R);
+  face.addColorStop(0,"#06210f"); face.addColorStop(1,"#020a05");
+  ctx.fillStyle=face; ctx.beginPath(); ctx.arc(C.x,C.y,R,0,7); ctx.fill();
+  ctx.save(); ctx.beginPath(); ctx.arc(C.x,C.y,R,0,7); ctx.clip();
+  // range rings + bearing lines
+  ctx.strokeStyle="rgba(70,200,110,.18)"; ctx.lineWidth=1.2;
+  for (let r=R/5; r<=R; r+=R/5){ ctx.beginPath(); ctx.arc(C.x,C.y,r,0,7); ctx.stroke(); }
+  for (let a=0;a<12;a++){ const g=a*Math.PI/6; ctx.beginPath(); ctx.moveTo(C.x,C.y); ctx.lineTo(C.x+Math.cos(g)*R, C.y+Math.sin(g)*R); ctx.stroke(); }
+  ctx.strokeStyle="rgba(90,170,255,.22)"; ctx.lineWidth=1.6;
+  MAP.forEach(l=>{ ctx.beginPath(); l.forEach(([x,y],i)=> i ? ctx.lineTo(C.x+x,C.y+y) : ctx.moveTo(C.x+x,C.y+y)); ctx.stroke(); });
+  // sweep beam with fading wedge
+  const s = sweepAng(t);
+  for (let k=0;k<40;k++){
+    const a0 = s - k*.02;
+    ctx.fillStyle=`rgba(60,255,120,${.16*(1-k/40)})`;
+    ctx.beginPath(); ctx.moveTo(C.x,C.y); ctx.arc(C.x,C.y,R,a0-.02,a0); ctx.closePath(); ctx.fill();
+  }
+  ctx.strokeStyle="rgba(140,255,170,.75)"; ctx.lineWidth=2; ctx.shadowColor="#5dff8c"; ctx.shadowBlur=14;
+  ctx.beginPath(); ctx.moveTo(C.x,C.y); ctx.lineTo(C.x+Math.cos(s)*R, C.y+Math.sin(s)*R); ctx.stroke(); ctx.shadowBlur=0;
+  // weather / clutter blips
+  BLIPS.forEach(b=>{ const f = clamp(1-(t-lastHit(t,b.x,b.y))/SWEEP); ctx.fillStyle=`rgba(80,255,130,${.35*f})`; ctx.beginPath(); ctx.arc(C.x+b.x,C.y+b.y,b.s*2,0,7); ctx.fill(); });
+
+  // other traffic
+  OTHERS.forEach(o=>{
+    const pos = tt => ({ x:o.x0+o.vx*tt, y:o.y0+o.vy*tt }), p = pos(t);
+    const f = drawTarget(t, p.x, p.y, { prev:k=>pos(t-k*1.4) }, .85, false);
+    glowText(o.cs, C.x+p.x+34, C.y+p.y-34, 17, "#8dffaa", .8*f);
+    glowText(o.alt+" "+o.type, C.x+p.x+34, C.y+p.y-14, 15, "#8dffaa", .65*f);
+  });
+
+  // UAL175: data block flickers then drops at T_OFF, leaving only the primary return
+  const a = aaPos(t), off = t >= T_OFF, flick = t > T_OFF-.6 && t < T_OFF && (Math.floor(t*14)%3===0);
+  const f = drawTarget(t, a.x, a.y, { prev:k=>aaPos(t-k*1.4) }, 1, off);
+  if (!off && !flick){
+    glowText("UAL175", C.x+a.x+34, C.y+a.y-38, 20, "#d6ffe0", f);
+    glowText("310 B767", C.x+a.x+34, C.y+a.y-15, 17, "#b8ffc9", .9*f);
+  }
+  if (off){                                                   // controller's highlight ring + coast tag
+    const k = clamp((t-T_OFF-.4)/.5);
+    ctx.strokeStyle=`rgba(255,215,90,${.8*k*(.75+.25*Math.sin(t*6))})`; ctx.lineWidth=1.8;
+    ctx.beginPath(); ctx.arc(C.x+a.x, C.y+a.y, 26, 0, 7); ctx.stroke();
+    glowText("CST  UAL175", C.x+a.x+34, C.y+a.y-34, 17, "#ffd75a", .85*k*(Math.floor(t*2.5)%2 ? 1 : .55));
+  }
+  ctx.restore();
+  // scope bezel
+  ctx.strokeStyle="#1d2a22"; ctx.lineWidth=26; ctx.beginPath(); ctx.arc(C.x,C.y,R+13,0,7); ctx.stroke();
+  ctx.strokeStyle="rgba(90,255,140,.25)"; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(C.x,C.y,R,0,7); ctx.stroke();
+  ctx.fillStyle="rgba(140,220,170,.5)"; ctx.font='700 14px "DejaVu Sans Mono", monospace';
+  for (let d=0; d<360; d+=30){ const g=(d-90)*Math.PI/180; ctx.fillText(String(d).padStart(3,"0"), C.x+Math.cos(g)*(R+40)-14, C.y+Math.sin(g)*(R+40)+5); }
+  ctx.restore();
+
+  // screen-space overlays: clock, caption, CRT glow, grain, letterbox
+  ctx.setTransform(1,0,0,1,0,0);
+  const secs = 46*60 + 45 + t*2.7, hh = "08", mm = String(Math.floor(secs/60)).padStart(2,"0"), ss = String(Math.floor(secs%60)).padStart(2,"0");
+  ctx.direction="ltr"; ctx.textAlign="left";
+  glowText(`${hh}:${mm}:${ss} EDT`, 120, 120, 26, "#8dffaa", .9);
+  glowText("NEW YORK CENTER · SEP 11 2001", 120, 152, 16, "#6fd98c", .7);
+  const cap = clamp((t-T_OFF-1.2)/.6) * clamp((TL-.6-t)/.6);
+  if (cap>0){
+    ctx.save(); ctx.globalAlpha=cap; ctx.direction="rtl"; ctx.textAlign="right";
+    const lg=ctx.createLinearGradient(W,0,W-820,0); lg.addColorStop(0,"rgba(0,0,0,.85)"); lg.addColorStop(1,"rgba(0,0,0,0)");
+    ctx.fillStyle=lg; ctx.fillRect(W-820, H-212, 820, 120);
+    ctx.fillStyle="#9e1a20"; ctx.fillRect(W-104, H-200, 5, 92);
+    ctx.fillStyle="#cf5a54"; ctx.font="700 22px Cairo"; ctx.fillText("الساعة 08:47", W-120, H-170);
+    ctx.fillStyle="#f4ecdb"; ctx.font="900 46px Cairo"; ctx.fillText("اختفاء الطائرة UA175 من الرادار", W-120, H-118);
+    ctx.restore();
+  }
+  ctx.globalCompositeOperation="screen"; ctx.fillStyle="rgba(20,90,40,.06)"; ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation="source-over";
+  for (let y=0;y<H;y+=4){ ctx.fillStyle="rgba(0,0,0,.18)"; ctx.fillRect(0,y,W,1); }        // scanlines
+  const r = rnd(1+Math.floor(t*24));
+  for (let i=0;i<500;i++){ ctx.fillStyle=`rgba(150,255,180,${r()*.05})`; ctx.fillRect(r()*W, r()*H, 2, 2); }
+  const vg=ctx.createRadialGradient(W/2,H/2,H*.3,W/2,H/2,H*.95); vg.addColorStop(0,"rgba(0,0,0,0)"); vg.addColorStop(1,"rgba(0,0,0,.85)");
+  ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
+  const fade = Math.max(clamp(1-t/.6), clamp((t-(TL-.8))/.8));
+  if (fade>0){ ctx.fillStyle=`rgba(0,0,0,${fade})`; ctx.fillRect(0,0,W,H); }
+  ctx.fillStyle="#000"; ctx.fillRect(0,0,W,34); ctx.fillRect(0,H-34,W,34);
+}
+
+// ---------- sound: room hum, sweep ticks, radio chatter, then static after the signal drops ----------
+function buildSound(ac, out, t0){
+  const T = s => t0 + s, master = ac.createGain(); master.connect(out);
+  master.gain.setValueAtTime(0,T(0)); master.gain.linearRampToValueAtTime(.9,T(.6));
+  master.gain.setValueAtTime(.9,T(TL-.9)); master.gain.linearRampToValueAtTime(0,T(TL));
+  const len = ac.sampleRate*2, nb = ac.createBuffer(1,len,ac.sampleRate), d = nb.getChannelData(0), r = rnd(9);
+  for (let i=0;i<len;i++) d[i] = r()*2-1;
+  // low room hum
+  [60,120].forEach((f,i)=>{ const o=ac.createOscillator(), g=ac.createGain(); o.frequency.value=f; g.gain.value=i?.012:.03; o.connect(g); g.connect(master); o.start(T(0)); o.stop(T(TL)); });
+  // a soft tick each time the sweep passes UAL175
+  for (let n=0; n*SWEEP<TL; n++){
+    const a = aaPos(n*SWEEP), at = Math.max(0, lastHit((n+1)*SWEEP, a.x, a.y)); if (at>=TL-.3) continue;
+    const o=ac.createOscillator(), g=ac.createGain(); o.frequency.value=1250;
+    g.gain.setValueAtTime(0,T(at)); g.gain.linearRampToValueAtTime(.05,T(at+.004)); g.gain.exponentialRampToValueAtTime(.0005,T(at+.09));
+    o.connect(g); g.connect(master); o.start(T(at)); o.stop(T(at+.1));
+  }
+  // radio static: quiet before the drop, swells and crackles after it
+  const st=ac.createBufferSource(); st.buffer=nb; st.loop=true;
+  const bp=ac.createBiquadFilter(); bp.type="bandpass"; bp.frequency.value=1800; bp.Q.value=.6;
+  const sg=ac.createGain(); sg.gain.setValueAtTime(.015,T(0));
+  sg.gain.setValueAtTime(.015,T(T_OFF)); sg.gain.linearRampToValueAtTime(.16,T(T_OFF+.5));
+  for (let k=0, s=T_OFF+.6; s<TL-.4; k++, s+=.18+r()*.25) sg.gain.setValueAtTime(.08+r()*.14, T(s));    // crackle
+  st.connect(bp); bp.connect(sg); sg.connect(master); st.start(T(0)); st.stop(T(TL));
+  // radio key-up clicks (controller calling, no answer)
+  [T_OFF+1.4, T_OFF+3.2, T_OFF+5.0].forEach(s=>{ if (s>TL-.5) return;
+    const o=ac.createOscillator(), g=ac.createGain(); o.type="square"; o.frequency.value=900;
+    g.gain.setValueAtTime(0,T(s)); g.gain.linearRampToValueAtTime(.05,T(s+.005)); g.gain.exponentialRampToValueAtTime(.0005,T(s+.06));
+    o.connect(g); g.connect(master); o.start(T(s)); o.stop(T(s+.07)); });
+  // low impact when the data block drops
+  const o=ac.createOscillator(), g=ac.createGain(); o.frequency.setValueAtTime(70,T(T_OFF)); o.frequency.exponentialRampToValueAtTime(30,T(T_OFF+2));
+  g.gain.setValueAtTime(0,T(T_OFF)); g.gain.linearRampToValueAtTime(.35,T(T_OFF+.02)); g.gain.exponentialRampToValueAtTime(.0005,T(T_OFF+2.6));
+  o.connect(g); g.connect(master); o.start(T(T_OFF)); o.stop(T(T_OFF+2.7));
+}
+async function renderSoundtrack(){ const oac=new OfflineAudioContext(2, Math.ceil(48000*TL), 48000); buildSound(oac, oac.destination, 0); return oac.startRendering(); }
+function encodeWav(buf){
+  const ch=buf.numberOfChannels, len=buf.length, sr=buf.sampleRate, v=new DataView(new ArrayBuffer(44+len*ch*2));
+  const w=(o,s)=>{ for (let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
+  w(0,"RIFF"); v.setUint32(4,36+len*ch*2,true); w(8,"WAVEfmt "); v.setUint32(16,16,true); v.setUint16(20,1,true);
+  v.setUint16(22,ch,true); v.setUint32(24,sr,true); v.setUint32(28,sr*ch*2,true); v.setUint16(32,ch*2,true); v.setUint16(34,16,true);
+  w(36,"data"); v.setUint32(40,len*ch*2,true);
+  const cs=[...Array(ch)].map((_,c)=>buf.getChannelData(c));
+  for (let i=0,o=44;i<len;i++) for (let c=0;c<ch;c++,o+=2){ const x=Math.max(-1,Math.min(1,cs[c][i])); v.setInt16(o, x<0?x*0x8000:x*0x7fff, true); }
+  return new Blob([v],{type:"audio/wav"});
+}
+
+let AC=null;
+document.getElementById("play").onclick = () => {
+  AC = AC || new AudioContext(); AC.resume();
+  const t0 = AC.currentTime + .1; buildSound(AC, AC.destination, t0);
+  document.body.classList.add("playing");
+  const loop = () => { const t = AC.currentTime - t0; render(clamp(t,0,TL)); if (t<TL) requestAnimationFrame(loop); else document.body.classList.remove("playing"); };
+  requestAnimationFrame(loop);
+};
+document.fonts.load("700 30px Cairo").finally(()=>{ render(T_OFF+3); window.__render=render; window.__TL=TL; });
+</script>
+</body>
+</html>

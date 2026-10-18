@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>زر الاشتراك</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  html,body { margin:0; height:100%; background:#00b140; overflow:hidden; font-family:Cairo, sans-serif; }
+  #stage { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { width:min(100vw, calc(100vh * 16 / 9)); height:auto; aspect-ratio:16/9; display:block; }
+  #play { position:fixed; bottom:16px; right:16px; z-index:2; background:#13213a; color:#fff; border:1px solid #3b5277; border-radius:6px; padding:8px 16px; font:inherit; cursor:pointer; }
+  body.playing #play { display:none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<button id="play">▶ تشغيل</button>
+<script>
+// Chroma-key subscribe call-to-action: avatar card with the subscriber count, a cursor clicks
+// SUBSCRIBE (→ SUBSCRIBED) and the bell (rings), the count ticks up. Original design; all sound
+// effects are synthesised. No green in the artwork, so it keys cleanly.
+const AVATAR = "__AVATAR__";
+const SUBS = 20600;
+const CHANNEL_EN = "Omar Matar", CHANNEL_AR = "عمر مطر";
+const W = 1920, H = 1080, TL = 7, KEY = "#00b140";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const clamp = (v,a=0,b=1) => Math.max(a, Math.min(b, v));
+const lerp = (a,b,t) => a + (b-a)*t;
+const ease = t => t<.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+const easeOut = t => 1 - Math.pow(1-t,3);
+const back = t => { const c = 1.7; return 1 + (c+1)*Math.pow(t-1,3) + c*Math.pow(t-1,2); };
+
+// timeline (seconds)
+const T = { cardIn:[0.15, .6], cursorIn:[1.0, 1.0], clickSub:2.15, clickBell:3.55, countUp:[3.7, 4.6], out:[6.15, .55] };
+
+// layout: one card centred low in frame
+const CW = 1320, CH = 220, CX = W/2, CY = 820;
+const BTN = { x: CX + 230, y: CY - 38, w: 300, h: 76 };      // subscribe button
+const BELL = { x: CX + 590, y: CY };                          // bell centre
+
+let IMG = null;
+function rr(x, y, w, h, r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+function bell(x, y, s, ring, filled){
+  ctx.save(); ctx.translate(x, y); ctx.rotate(Math.sin(ring*Math.PI*6)*.45*(1-ring)); ctx.scale(s, s);
+  ctx.fillStyle = filled ? "#1b1b1f" : "transparent"; ctx.strokeStyle = "#1b1b1f"; ctx.lineWidth = 5; ctx.lineJoin = "round";
+  ctx.beginPath(); ctx.moveTo(-26, 16); ctx.quadraticCurveTo(-22, 8, -22, -6); ctx.quadraticCurveTo(-22, -30, 0, -32); ctx.quadraticCurveTo(22, -30, 22, -6); ctx.quadraticCurveTo(22, 8, 26, 16); ctx.closePath();
+  if (filled) ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, 22, 7, 0, Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, -36, 4, 0, 7); ctx.fillStyle = "#1b1b1f"; ctx.fill();
+  ctx.restore();
+}
+function cursor(x, y, press){
+  ctx.save(); ctx.translate(x, y); const s = 1.6*(1 - .12*press); ctx.scale(s, s);
+  ctx.shadowColor = "rgba(0,0,0,.35)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 3;
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = "#111"; ctx.lineWidth = 2.2; ctx.lineJoin = "round";
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(0,34); ctx.lineTo(9,26); ctx.lineTo(15,40); ctx.lineTo(21,37); ctx.lineTo(15,24); ctx.lineTo(26,24); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+function ripple(x, y, t0, t, color){
+  const k = (t - t0)/.45; if (k < 0 || k > 1) return;
+  ctx.save(); ctx.strokeStyle = color; ctx.globalAlpha = 1 - k; ctx.lineWidth = 6*(1-k) + 1;
+  ctx.beginPath(); ctx.arc(x, y, 20 + 70*easeOut(k), 0, 7); ctx.stroke(); ctx.restore();
+}
+function sparkles(x, y, t0, t){
+  const k = (t - t0)/.7; if (k < 0 || k > 1) return;
+  for (let i=0;i<10;i++){ const a = i/10*Math.PI*2 + .3, d = 40 + 70*easeOut(k), s = 7*(1-k);
+    ctx.save(); ctx.translate(x + Math.cos(a)*d, y + Math.sin(a)*d); ctx.rotate(a); ctx.fillStyle = i%2 ? "#ffd25a" : "#ffffff"; ctx.globalAlpha = 1-k;
+    ctx.beginPath(); ctx.moveTo(0,-s*1.8); ctx.lineTo(s*.5,0); ctx.lineTo(0,s*1.8); ctx.lineTo(-s*.5,0); ctx.closePath(); ctx.fill(); ctx.restore(); }
+}
+
+// cursor path: enters from the bottom right, glides to the button, then to the bell, then away
+function cursorPos(t){
+  const P0 = [W+80, H+80], P1 = [BTN.x + BTN.w*.55, BTN.y + BTN.h*.6], P2 = [BELL.x + 4, BELL.y + 6], P3 = [W+120, H+60];
+  if (t < T.clickSub) { const k = ease(clamp((t - T.cursorIn[0])/(T.clickSub - .15 - T.cursorIn[0]))); return [lerp(P0[0],P1[0],k), lerp(P0[1],P1[1],k)]; }
+  if (t < T.clickBell){ const k = ease(clamp((t - T.clickSub - .35)/(T.clickBell - T.clickSub - .5))); return [lerp(P1[0],P2[0],k), lerp(P1[1],P2[1],k) - Math.sin(k*Math.PI)*40]; }
+  const k = ease(clamp((t - T.clickBell - .7)/1.2)); return [lerp(P2[0],P3[0],k), lerp(P2[1],P3[1],k)];
+}
+const press = (t, at) => { const d = t - at; return d > -.08 && d < .14 ? 1 - Math.abs(d - .03)/.11 : 0; };
+
+function render(t){
+  ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha = 1;
+  ctx.fillStyle = KEY; ctx.fillRect(0,0,W,H);
+  const inK = clamp((t - T.cardIn[0])/T.cardIn[1]), outK = clamp((t - T.out[0])/T.out[1]);
+  if (inK <= 0 || outK >= 1) return;
+  const sc = lerp(.6, 1, back(inK)) * lerp(1, .7, ease(outK)), a = clamp(inK*2) * (1 - ease(outK));
+  const subbed = t >= T.clickSub, belled = t >= T.clickBell;
+  ctx.save(); ctx.globalAlpha = a; ctx.translate(CX, CY + lerp(140, 0, easeOut(inK)) + 60*ease(outK)); ctx.scale(sc, sc); ctx.translate(-CX, -CY);
+
+  // card
+  ctx.save(); ctx.shadowColor = "rgba(0,0,0,.35)"; ctx.shadowBlur = 40; ctx.shadowOffsetY = 14;
+  rr(CX - CW/2, CY - CH/2, CW, CH, CH/2); ctx.fillStyle = "#ffffff"; ctx.fill(); ctx.restore();
+  // avatar
+  const ax = CX - CW/2 + CH/2, r = CH/2 - 22;
+  ctx.save(); ctx.beginPath(); ctx.arc(ax, CY, r, 0, 7); ctx.clip(); if (IMG) ctx.drawImage(IMG, ax - r, CY - r, 2*r, 2*r); ctx.restore();
+  ctx.strokeStyle = "#e62117"; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(ax, CY, r + 6, 0, 7); ctx.stroke();
+  // subscriber count
+  const cnt = SUBS + (t >= T.countUp[0] ? Math.round(easeOut(clamp((t - T.countUp[0])/(T.countUp[1]-T.countUp[0])))) : 0);
+  const bump = 1 + .12*Math.max(0, 1 - Math.abs(t - T.countUp[1])/.2);
+  const tx = ax + r + 40;
+  // channel name: Latin and Arabic parts drawn separately so the bidi order never flips
+  ctx.textAlign = "left"; ctx.direction = "ltr"; ctx.fillStyle = "#0f0f10"; ctx.font = "900 46px Cairo";
+  ctx.fillText(CHANNEL_EN, tx, CY - 14); let nx = tx + ctx.measureText(CHANNEL_EN).width;
+  ctx.fillStyle = "#c4c4ca"; ctx.fillText("  |  ", nx, CY - 14); nx += ctx.measureText("  |  ").width;
+  ctx.fillStyle = "#0f0f10"; ctx.direction = "rtl"; ctx.textAlign = "right"; const arW = ctx.measureText(CHANNEL_AR).width; ctx.fillText(CHANNEL_AR, nx + arW, CY - 14);
+  // subscriber count with labels on the same line
+  ctx.save(); ctx.translate(tx, CY + 46); ctx.scale(bump, bump);
+  ctx.textAlign = "left"; ctx.direction = "ltr"; ctx.fillStyle = "#e62117"; ctx.font = "900 40px Cairo"; ctx.fillText(cnt.toLocaleString("en-US"), 0, 0);
+  const cw = ctx.measureText(cnt.toLocaleString("en-US")).width;
+  ctx.fillStyle = "#606066"; ctx.font = "700 28px Cairo"; ctx.fillText(" subscribers · ", cw, 0); const lw = ctx.measureText(" subscribers · ").width;
+  ctx.direction = "rtl"; ctx.textAlign = "right"; const mw = ctx.measureText("مشترك").width; ctx.fillText("مشترك", cw + lw + mw, 0);
+  ctx.restore();
+  // subscribe button
+  const bp = press(t, T.clickSub), bs = 1 - .06*bp;
+  ctx.save(); ctx.translate(BTN.x + BTN.w/2, BTN.y + BTN.h/2); ctx.scale(bs, bs);
+  const pop = subbed ? back(clamp((t - T.clickSub)/.3)) : 1;
+  ctx.scale(subbed ? lerp(.9, 1, pop) : 1, subbed ? lerp(.9, 1, pop) : 1);
+  rr(-BTN.w/2, -BTN.h/2, BTN.w, BTN.h, BTN.h/2); ctx.fillStyle = subbed ? "#e5e5e8" : "#e62117"; ctx.fill();
+  ctx.textAlign = "center"; ctx.direction = "ltr"; ctx.fillStyle = subbed ? "#2b2b30" : "#ffffff"; ctx.font = "900 32px Cairo";
+  ctx.fillText(subbed ? "SUBSCRIBED ✓" : "SUBSCRIBE", 0, 11);
+  ctx.restore();
+  ripple(BTN.x + BTN.w/2, BTN.y + BTN.h/2, T.clickSub, t, "#e62117");
+  // bell
+  const ring = belled ? clamp((t - T.clickBell)/1.1) : 1;
+  const bellIn = subbed ? back(clamp((t - T.clickSub - .1)/.35)) : 0;
+  if (bellIn > 0){
+    ctx.save(); ctx.globalAlpha *= clamp(bellIn); bell(BELL.x, BELL.y, 1.15*bellIn*(1 - .1*press(t, T.clickBell)), ring, belled); ctx.restore();
+    ripple(BELL.x, BELL.y, T.clickBell, t, "#ffb400"); sparkles(BELL.x, BELL.y, T.clickBell, t);
+  }
+  ctx.restore();
+
+  // headline above the card
+  const hk = clamp((t - .5)/.5) * (1 - ease(outK));
+  ctx.save(); ctx.globalAlpha = hk; ctx.textAlign = "center"; ctx.direction = "rtl";
+  ctx.fillStyle = "rgba(11,21,38,.92)"; rr(CX - 360, CY - CH/2 - 120, 720, 84, 42); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.font = "900 44px Cairo"; ctx.fillText("اشترك في القناة وفعّل الجرس 🔔", CX, CY - CH/2 - 63);
+  ctx.restore();
+
+  // cursor
+  if (t > T.cursorIn[0] && t < T.out[0] + .2){ const [x, y] = cursorPos(t); cursor(x, y, Math.max(press(t, T.clickSub), press(t, T.clickBell))); }
+}
+
+// ---------- synthesised sound effects ----------
+function buildSound(ac, out, t0){
+  const T0 = s => t0 + s, master = ac.createGain(); master.gain.value = .9; master.connect(out);
+  const len = ac.sampleRate, nb = ac.createBuffer(1, len, ac.sampleRate), d = nb.getChannelData(0); let s = 3;
+  for (let i=0;i<len;i++){ s = (s*16807) % 2147483647; d[i] = s/2147483647*2 - 1; }
+  const noise = () => { const n = ac.createBufferSource(); n.buffer = nb; n.loop = true; return n; };
+  const whoosh = (at, dur, f0, f1, vol) => { const n = noise(), bp = ac.createBiquadFilter(), g = ac.createGain(); bp.type = "bandpass"; bp.Q.value = 1.4;
+    bp.frequency.setValueAtTime(f0, T0(at)); bp.frequency.exponentialRampToValueAtTime(f1, T0(at+dur));
+    g.gain.setValueAtTime(0, T0(at)); g.gain.linearRampToValueAtTime(vol, T0(at+dur*.4)); g.gain.linearRampToValueAtTime(0, T0(at+dur));
+    n.connect(bp); bp.connect(g); g.connect(master); n.start(T0(at)); n.stop(T0(at+dur+.05)); };
+  const click = (at) => { const n = noise(), hp = ac.createBiquadFilter(), g = ac.createGain(); hp.type = "highpass"; hp.frequency.value = 2500;
+    g.gain.setValueAtTime(0, T0(at)); g.gain.linearRampToValueAtTime(.5, T0(at+.002)); g.gain.exponentialRampToValueAtTime(.001, T0(at+.04));
+    n.connect(hp); hp.connect(g); g.connect(master); n.start(T0(at)); n.stop(T0(at+.06));
+    const o = ac.createOscillator(), og = ac.createGain(); o.frequency.setValueAtTime(1800, T0(at)); o.frequency.exponentialRampToValueAtTime(600, T0(at+.03));
+    og.gain.setValueAtTime(.25, T0(at)); og.gain.exponentialRampToValueAtTime(.001, T0(at+.05)); o.connect(og); og.connect(master); o.start(T0(at)); o.stop(T0(at+.06)); };
+  const pop = (at, f) => { const o = ac.createOscillator(), g = ac.createGain(); o.type = "sine"; o.frequency.setValueAtTime(f, T0(at)); o.frequency.exponentialRampToValueAtTime(f*2.2, T0(at+.08));
+    g.gain.setValueAtTime(0, T0(at)); g.gain.linearRampToValueAtTime(.4, T0(at+.01)); g.gain.exponentialRampToValueAtTime(.001, T0(at+.18)); o.connect(g); g.connect(master); o.start(T0(at)); o.stop(T0(at+.2)); };
+  const ding = (at) => { [[1318.5,.32],[2637,.12],[3955,.05],[1975.5,.08]].forEach(([f,v]) => { const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = f;
+    g.gain.setValueAtTime(0, T0(at)); g.gain.linearRampToValueAtTime(v, T0(at+.005)); g.gain.exponentialRampToValueAtTime(.0005, T0(at+1.6)); o.connect(g); g.connect(master); o.start(T0(at)); o.stop(T0(at+1.7)); });
+    for (let i=0;i<6;i++){ const at2 = at + .05 + i*.07, o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = 2600 + i*350;                // sparkle
+      g.gain.setValueAtTime(0, T0(at2)); g.gain.linearRampToValueAtTime(.06, T0(at2+.005)); g.gain.exponentialRampToValueAtTime(.0005, T0(at2+.25)); o.connect(g); g.connect(master); o.start(T0(at2)); o.stop(T0(at2+.3)); } };
+  whoosh(T.cardIn[0] - .05, .55, 300, 2200, .35);       // card flies in
+  pop(T.cardIn[0] + .45, 420);
+  whoosh(T.cursorIn[0], .5, 1200, 500, .08);            // cursor glides in
+  click(T.clickSub); pop(T.clickSub + .04, 520);        // subscribe
+  click(T.clickBell); ding(T.clickBell + .03);           // bell
+  pop(T.countUp[1] - .05, 700);                          // count ticks up
+  whoosh(T.out[0], .5, 2000, 250, .3);                   // card flies out
+}
+async function renderSoundtrack(){ const oac = new OfflineAudioContext(2, Math.ceil(48000*TL), 48000); buildSound(oac, oac.destination, 0); return oac.startRendering(); }
+function encodeWav(buf){
+  const ch=buf.numberOfChannels, len=buf.length, sr=buf.sampleRate, v=new DataView(new ArrayBuffer(44+len*ch*2));
+  const w=(o,s)=>{ for (let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
+  w(0,"RIFF"); v.setUint32(4,36+len*ch*2,true); w(8,"WAVEfmt "); v.setUint32(16,16,true); v.setUint16(20,1,true);
+  v.setUint16(22,ch,true); v.setUint32(24,sr,true); v.setUint32(28,sr*ch*2,true); v.setUint16(32,ch*2,true); v.setUint16(34,16,true);
+  w(36,"data"); v.setUint32(40,len*ch*2,true);
+  const cs=[...Array(ch)].map((_,c)=>buf.getChannelData(c));
+  for (let i=0,o=44;i<len;i++) for (let c=0;c<ch;c++,o+=2){ const x=Math.max(-1,Math.min(1,cs[c][i])); v.setInt16(o, x<0?x*0x8000:x*0x7fff, true); }
+  return new Blob([v],{type:"audio/wav"});
+}
+
+let AC = null;
+document.getElementById("play").onclick = () => {
+  AC = AC || new AudioContext(); AC.resume(); const t0 = AC.currentTime + .1; buildSound(AC, AC.destination, t0); document.body.classList.add("playing");
+  const loop = () => { const t = AC.currentTime - t0; render(clamp(t,0,TL)); if (t<TL) requestAnimationFrame(loop); else document.body.classList.remove("playing"); };
+  requestAnimationFrame(loop);
+};
+(async function init(){
+  await Promise.race([document.fonts.load("900 50px Cairo"), new Promise(r => setTimeout(r, 2500))]);
+  IMG = await new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = AVATAR; });
+  render(4.2); window.__render = render; window.__TL = TL;
+})();
+</script>
+</body>
+</html>

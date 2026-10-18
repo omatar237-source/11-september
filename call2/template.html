@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>مكالمة مادلين · الرحلة 11</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  :root { --ink:#efe6d2; --panel:rgba(18,14,12,.94); --accent:#8e1418; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:#000; color:var(--ink); font-family:Cairo, sans-serif; overflow:hidden; }
+  #stage { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { width:min(100vw, calc(100vh * 16 / 9)); height:auto; aspect-ratio:16/9; display:block; background:#000; }
+  #panel { position:fixed; top:16px; right:16px; width:380px; max-width:calc(100vw - 32px); max-height:calc(100vh - 32px); overflow:auto;
+           background:var(--panel); border:1px solid #3a2a20; border-radius:10px; padding:14px; z-index:5; font-size:13px; }
+  #panel h2 { margin:0 0 6px; font-size:16px; }
+  #panel p { margin:0 0 10px; opacity:.7; font-size:12px; line-height:1.6; }
+  .cue { display:flex; gap:6px; align-items:center; margin-bottom:6px; }
+  .cue span { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; opacity:.85; }
+  .cue input { width:62px; background:#0d0a08; color:var(--ink); border:1px solid #4a3a2e; border-radius:6px; padding:4px; font:inherit; direction:ltr; }
+  .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  button { flex:1; background:#2a1d16; color:var(--ink); border:1px solid #5a4030; border-radius:6px; padding:8px 10px; font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:#b8343a; }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { margin-top:8px; font-size:12px; opacity:.8; min-height:1.2em; }
+  #show { position:fixed; top:16px; right:16px; z-index:4; display:none; }
+  body.hidden #panel { display:none; }
+  body.hidden #show { display:block; opacity:.15; }
+  body.hidden #show:hover { opacity:1; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<button id="show">⚙</button>
+<div id="panel">
+  <h2>مكالمة مادلين · الرحلة 11</h2>
+  <p>كل سطر ترجمة يظهر من وقت البداية حتى النهاية (بالثواني). عدّل الأرقام إذا كان سطر مبكراً أو متأخراً — التغيير يُحفظ تلقائياً.</p>
+  <div id="cues"></div>
+  <div class="row"><button id="play" class="primary">▶ تشغيل</button><button id="mp4">⬇ حفظ الفيديو MP4</button></div>
+  <div class="row"><button id="reset">إعادة الأوقات الأصلية</button><button id="hide">إخفاء (H)</button></div>
+  <div id="status"></div>
+</div>
+<script>
+const PHOTO = "__PHOTO__", AUDIO = "__AUDIO__";
+const W = 1920, H = 1080;
+const OP = "الموظف", BO = "مادلين", CUT = "";
+// subtitle cards: [speaker, text, start, end] — times measured from the speech pauses in the call audio
+const DEFAULT_CUES = [
+  [BO, "يا إلهي، هناك خطأ ما هنا", 1.0, 2.6],
+  [OP, "ماذا يحدث؟ إيمي؟ هل لا تزالين هناك؟", 2.7, 5.4],
+  [BO, "نحن في هبوط سريع.. نحن في كل مكان", 5.95, 9.2],
+  [OP, "هل يمكنك النظر من النافذة وإخبارنا أين أنتم؟ هل تعرفين أي شيء؟ إيمي هل تعرفين أنكم تتجهون نحو كينيدي؟", 9.9, 14.7],
+  [BO, "أرى ماءً.. مبانٍ..", 15.5, 18.1],
+  [BO, "نحن نطير على ارتفاع منخفض..", 18.1, 20.6],
+  [BO, "نحن نطير على ارتفاع منخفض جداً..", 20.6, 23.5],
+  [BO, "نحن نطير بارتفاع منخفض جداً!", 23.5, 25.7],
+  [BO, "يا إلهي، نحن نطير..", 26.9, 28.1],
+  [CUT, "(ينقطع الاتصال)", 28.1, 29.2],
+  [OP, "هل تسمعينني؟ إيمي؟ إيمي؟ هل تسمعينني", 29.2, 32.3],
+];
+let CUES = DEFAULT_CUES.map(c=>c.slice());
+try { const s = JSON.parse(localStorage.getItem("call11-sweeney-cues-v1")||"null"); if (Array.isArray(s) && s.length===CUES.length) s.forEach((t,i)=>{ CUES[i][2]=+t[0]; CUES[i][3]=+t[1]; }); } catch(e) {}
+const saveCues = () => { try { localStorage.setItem("call11-sweeney-cues-v1", JSON.stringify(CUES.map(c=>[c[2],c[3]]))); } catch(e) {} };
+
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const clamp = (v,a=0,b=1) => Math.max(a, Math.min(b, v));
+const ease = t => t<.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+function rnd(seed){ let s=seed; return () => (s = (s*16807) % 2147483647) / 2147483647; }
+let IMG, BG, BUF = null, TL = 30.4, ENV = [];
+
+function loadImg(src){ return new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=src; }); }
+function b64(src){ const bin = atob(src.slice(src.indexOf(",")+1)), u = new Uint8Array(bin.length); for (let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return u.buffer; }
+
+// soft, dark, blurred copy of the photo fills the 16:9 frame behind the portrait
+function makeBG(){
+  const c = document.createElement("canvas"); c.width=W; c.height=H; const g = c.getContext("2d");
+  g.filter = "blur(40px) grayscale(1) brightness(.35)";
+  const s = Math.max(W/IMG.width, H/IMG.height)*1.15;
+  g.drawImage(IMG, (W-IMG.width*s)/2, (H-IMG.height*s)/2, IMG.width*s, IMG.height*s);
+  return c;
+}
+// loudness envelope (for the call waveform)
+function makeEnv(){ const d = BUF.getChannelData(0), sr = BUF.sampleRate, w = Math.round(sr/60);
+  for (let i=0;i<d.length;i+=w){ let s=0; for (let j=i;j<Math.min(i+w,d.length);j++) s+=d[j]*d[j]; ENV.push(Math.sqrt(s/w)); } }
+const level = t => ENV.length ? ENV[clamp(Math.floor(t*60),0,ENV.length-1)] : 0;
+
+function wrap(text, maxW){
+  const words = text.split(" "), lines = []; let cur = "";
+  for (const w of words){ const t = cur ? cur+" "+w : w; if (ctx.measureText(t).width > maxW && cur){ lines.push(cur); cur = w; } else cur = t; }
+  if (cur) lines.push(cur); return lines;
+}
+
+function render(t){
+  ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha=1; ctx.fillStyle="#000"; ctx.fillRect(0,0,W,H);
+  // slow push-in across the whole call, with a slight drift
+  const p = ease(clamp(t/TL)), z = 1 + .12*p;
+  ctx.drawImage(BG, 0, 0);
+  const ph = 640*z, pw = ph*IMG.width/IMG.height, cx = W/2 + Math.sin(t*.15)*6, cy = H/2 - 40 + 30*p;
+  ctx.save(); ctx.shadowColor="rgba(0,0,0,.8)"; ctx.shadowBlur=60;
+  ctx.filter = "saturate(.55) contrast(1.05)";
+  ctx.drawImage(IMG, cx-pw/2, cy-ph/2, pw, ph); ctx.restore(); ctx.filter="none";
+  // edge fade so the portrait melts into the background
+  const fx = ctx.createLinearGradient(cx-pw/2,0,cx+pw/2,0);
+  fx.addColorStop(0,"rgba(0,0,0,.75)"); fx.addColorStop(.18,"rgba(0,0,0,0)"); fx.addColorStop(.82,"rgba(0,0,0,0)"); fx.addColorStop(1,"rgba(0,0,0,.75)");
+  ctx.fillStyle=fx; ctx.fillRect(cx-pw/2-2, 0, pw+4, H);
+  // vignette + warm-cold grade + grain
+  const vg = ctx.createRadialGradient(W/2,H*.45,H*.25,W/2,H/2,H*.95); vg.addColorStop(0,"rgba(0,0,0,0)"); vg.addColorStop(1,"rgba(0,0,0,.9)");
+  ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation="soft-light"; ctx.fillStyle="rgba(40,60,80,.25)"; ctx.fillRect(0,0,W,H); ctx.globalCompositeOperation="source-over";
+  const r = rnd(1+Math.floor(t*24)); for (let i=0;i<900;i++){ ctx.fillStyle=`rgba(255,255,255,${r()*.045})`; ctx.fillRect(r()*W, r()*H, 2, 2); }
+
+  // call indicator: red dot + live waveform, top-left
+  ctx.direction="rtl"; ctx.textAlign="left";
+  const on = (Math.floor(t*1.6)%2)===0;
+  ctx.fillStyle = on ? "#d0222a" : "#5a1014"; ctx.beginPath(); ctx.arc(130, 112, 9, 0, 7); ctx.fill();
+  ctx.fillStyle="#efe6d2"; ctx.font="700 24px Cairo"; ctx.textAlign="left"; ctx.direction="ltr";
+  ctx.fillText("AA 11 · CALL", 152, 121);
+  for (let k=0;k<40;k++){ const v = clamp(level(t - (40-k)/60)*9); ctx.fillStyle=`rgba(230,80,70,${.35+.6*v})`; const h = 4 + v*46; ctx.fillRect(130 + k*7, 168 - h/2, 4, h); }
+
+  // subtitle card
+  const cue = CUES.find(c => t>=c[2] && t<c[3]);
+  if (cue){
+    const L = t-cue[2], D = cue[3]-cue[2], a = clamp(L/.18)*clamp((D-L)/.18);
+    ctx.save(); ctx.globalAlpha=a; ctx.direction="rtl"; ctx.textAlign="center";
+    ctx.font="700 50px Cairo"; const lines = wrap(cue[1], 1500);
+    const lh = 70, top = H - 120 - lines.length*lh;
+    const bg = ctx.createLinearGradient(0, top-80, 0, H); bg.addColorStop(0,"rgba(0,0,0,0)"); bg.addColorStop(.35,"rgba(0,0,0,.7)"); bg.addColorStop(1,"rgba(0,0,0,.85)");
+    ctx.fillStyle=bg; ctx.fillRect(0, top-80, W, H-top+80);
+    ctx.fillStyle = cue[0]===BO ? "#e8a24a" : "#cf5a54"; ctx.font="700 26px Cairo";
+    if (cue[0]) ctx.fillText(cue[0], W/2, top-14);
+    ctx.fillStyle = cue[0]===CUT ? "#e0464c" : "#f4ecdb"; ctx.font="700 50px Cairo"; ctx.shadowColor="rgba(0,0,0,.9)"; ctx.shadowBlur=12;
+    lines.forEach((ln,i)=>ctx.fillText(ln, W/2, top + 48 + i*lh));
+    ctx.restore();
+  }
+  const fade = Math.max(clamp(1-t/.8), clamp((t-(TL-1.2))/1.2));
+  if (fade>0){ ctx.fillStyle=`rgba(0,0,0,${fade})`; ctx.fillRect(0,0,W,H); }
+  ctx.fillStyle="#000"; ctx.fillRect(0,0,W,34); ctx.fillRect(0,H-34,W,34);
+}
+
+// ---------- audio: the call itself plus a faint low drone ----------
+function buildSound(ac, out, t0){
+  const src = ac.createBufferSource(); src.buffer = BUF;
+  const hp = ac.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=90;
+  const g = ac.createGain(); g.gain.value = 1;
+  src.connect(hp); hp.connect(g); g.connect(out); src.start(t0);
+  const d = ac.createGain(); d.gain.setValueAtTime(0,t0); d.gain.linearRampToValueAtTime(.05,t0+2); d.gain.setValueAtTime(.05,t0+TL-1.5); d.gain.linearRampToValueAtTime(0,t0+TL);
+  const lp = ac.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=220; lp.connect(d); d.connect(out);
+  [55, 55.3, 82.4].forEach(f=>{ const o=ac.createOscillator(); o.frequency.value=f; o.connect(lp); o.start(t0); o.stop(t0+TL); });
+}
+async function renderSoundtrack(){ const oac = new OfflineAudioContext(2, Math.ceil(48000*TL), 48000); buildSound(oac, oac.destination, 0); return oac.startRendering(); }
+
+const status = m => document.getElementById("status").textContent = m;
+let AC = null, playing = false;
+function play(){
+  AC = AC || new AudioContext(); AC.resume();
+  const t0 = AC.currentTime + .1; buildSound(AC, AC.destination, t0); playing = true;
+  document.body.classList.add("hidden");
+  const loop = () => { const t = AC.currentTime - t0; render(clamp(t,0,TL)); if (t<TL) requestAnimationFrame(loop); else { playing=false; document.body.classList.remove("hidden"); } };
+  requestAnimationFrame(loop);
+}
+
+function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement("script"); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
+function download(blob, name){ const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 4000); }
+async function exportMp4(){
+  const btn = document.getElementById("mp4"); btn.disabled = true;
+  try {
+    if (!window.Mp4Muxer) await loadScript("https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.min.js");
+    const fps = 30, frames = Math.ceil(TL*fps);
+    const muxer = new Mp4Muxer.Muxer({ target:new Mp4Muxer.ArrayBufferTarget(), fastStart:"in-memory",
+      video:{ codec:"avc", width:W, height:H, frameRate:fps }, audio:{ codec:"aac", numberOfChannels:2, sampleRate:48000 } });
+    let err = null;
+    const venc = new VideoEncoder({ output:(c,m)=>muxer.addVideoChunk(c,m), error:e=>err=e });
+    venc.configure({ codec:"avc1.640028", width:W, height:H, bitrate:12e6, framerate:fps });
+    for (let i=0;i<frames;i++){
+      if (err) throw err;
+      render(i/fps); const f = new VideoFrame(cv, { timestamp:Math.round(i*1e6/fps), duration:Math.round(1e6/fps) });
+      venc.encode(f, { keyFrame:i%fps===0 }); f.close();
+      while (venc.encodeQueueSize > 6) await new Promise(r=>setTimeout(r,2));
+      if (i%15===0){ status(`جارٍ إنشاء الفيديو… ${Math.round(100*i/frames)}٪`); await new Promise(r=>setTimeout(r,0)); }
+    }
+    await venc.flush();
+    const buf = await renderSoundtrack(), n = buf.length, Lc = buf.getChannelData(0), Rc = buf.getChannelData(1);
+    const aenc = new AudioEncoder({ output:(c,m)=>muxer.addAudioChunk(c,m), error:e=>err=e });
+    aenc.configure({ codec:"mp4a.40.2", sampleRate:48000, numberOfChannels:2, bitrate:192000 });
+    for (let s=0;s<n;s+=1024){ const len=Math.min(1024,n-s), data=new Float32Array(len*2); data.set(Lc.subarray(s,s+len),0); data.set(Rc.subarray(s,s+len),len);
+      const ad = new AudioData({ format:"f32-planar", sampleRate:48000, numberOfFrames:len, numberOfChannels:2, timestamp:Math.round(s*1e6/48000), data }); aenc.encode(ad); ad.close(); }
+    await aenc.flush(); if (err) throw err;
+    muxer.finalize(); download(new Blob([muxer.target.buffer], { type:"video/mp4" }), "flight-11-sweeney-call.mp4"); status("تم التنزيل ✓");
+  } catch(e){ status("تعذّر إنشاء الفيديو: " + e.message); }
+  btn.disabled = false; render(12);
+}
+
+function buildUI(){
+  const box = document.getElementById("cues");
+  box.innerHTML = "";
+  CUES.forEach((c,i)=>{
+    const row = document.createElement("div"); row.className="cue";
+    const s = document.createElement("input"), e = document.createElement("input"), lbl = document.createElement("span");
+    s.type = e.type = "number"; s.step = e.step = "0.05"; s.value = c[2]; e.value = c[3]; lbl.textContent = c[1]; lbl.title = c[0]+": "+c[1];
+    s.oninput = () => { c[2] = +s.value || 0; saveCues(); if (!playing) render(c[2]+.3); };
+    e.oninput = () => { c[3] = +e.value || 0; saveCues(); if (!playing) render(Math.max(c[2], c[3]-.3)); };
+    row.append(s, e, lbl); box.appendChild(row);
+  });
+}
+document.getElementById("play").onclick = play;
+document.getElementById("mp4").onclick = exportMp4;
+document.getElementById("reset").onclick = () => { CUES = DEFAULT_CUES.map(c=>c.slice()); saveCues(); buildUI(); render(12); };
+document.getElementById("hide").onclick = () => document.body.classList.add("hidden");
+document.getElementById("show").onclick = () => document.body.classList.remove("hidden");
+addEventListener("keydown", e => { if (e.target.tagName==="INPUT") return; if (e.key==="h"||e.key==="H") document.body.classList.toggle("hidden"); if (e.key===" "){ e.preventDefault(); play(); } });
+
+(async function init(){
+  await Promise.race([document.fonts.load("700 50px Cairo"), new Promise(r=>setTimeout(r,2500))]);
+  IMG = await loadImg(PHOTO); BG = makeBG();
+  try { BUF = await new OfflineAudioContext(2, 48000, 48000).decodeAudioData(b64(AUDIO)); TL = BUF.duration; makeEnv(); }
+  catch(e){ status("تعذّر تحميل صوت المكالمة"); }
+  buildUI(); render(12);
+  window.__render = render; window.__TL = TL; window.__ready = !!BUF;
+})();
+</script>
+</body>
+</html>

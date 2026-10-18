@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>إقلاع الطائرة</title>
+<style>
+  html,body { margin:0; height:100%; background:#000; overflow:hidden; font-family:sans-serif; }
+  #stage { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { width:min(100vw, calc(100vh * 16 / 9)); height:auto; aspect-ratio:16/9; display:block; background:#000; }
+  #play { position:fixed; bottom:16px; right:16px; z-index:2; background:#2a1d16; color:#efe6d2; border:1px solid #5a4030; border-radius:6px; padding:8px 16px; font:inherit; cursor:pointer; }
+  body.playing #play { display:none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<button id="play">▶ تشغيل</button>
+<script>
+// Early-2000s twin-engine widebody (grey / dark-blue scheme) taxis onto the runway at sunrise,
+// holds while the engines spool up, then rolls, rotates and lifts off. render(t) draws any moment.
+const W = 1920, H = 1080, TL = 15;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const clamp = (v,a=0,b=1) => Math.max(a, Math.min(b, v));
+const lerp = (a,b,t) => a + (b-a)*t;
+const ease = t => t<.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+const easeOut = t => 1 - Math.pow(1-t,3);
+function rnd(seed){ let s=seed; return () => (s = (s*16807) % 2147483647) / 2147483647; }
+
+const GROUND = 800;                    // y where the main wheels touch the runway
+const T_HOLD = 4.6, T_ROLL = 7.4, T_ROT = 12.0, T_LIFT = 12.5;
+const ROLL_A = 210;                    // px/s² along the runway
+const S = .95;                          // aircraft scale
+const centre = x => x + 520*S;          // aircraft mid-point from its nose x
+
+// aircraft nose position (world x, px), height above runway, pitch (deg)
+function plane(t){
+  let x;
+  if (t < T_HOLD) x = lerp(2350, 1350, easeOut(t/T_HOLD));
+  else if (t < T_ROLL) x = 1350;
+  else { const d = t - T_ROLL; x = 1350 - .5*ROLL_A*d*d; }
+  const pitch = 8.5*ease(clamp((t-T_ROT)/1.4));
+  const lift = t > T_LIFT ? 38*Math.pow(t-T_LIFT, 2) : 0;
+  const speed = t < T_HOLD ? (1000/T_HOLD)*3*Math.pow(1-t/T_HOLD,2) : t < T_ROLL ? 0 : ROLL_A*(t-T_ROLL);
+  return { x, lift, pitch, speed };
+}
+// camera: holds a wide frame during the taxi, then tracks the take-off roll with a little lag
+function cam(t){
+  const p = plane(t);
+  // world x maps to screen x - (cam.x - 1220): cam.x = centre + 260 puts the aircraft mid-frame
+  const follow = clamp((t - (T_ROLL+.6)) / 2.0);
+  const x = lerp(centre(1350) + 260, centre(p.x) + 260 + 200, ease(follow));
+  const y = -Math.min(p.lift*.55, 140);
+  const z = lerp(1.0, .92, ease(clamp((t-T_ROLL)/6)));
+  return { x, y, z, shake: clamp(p.speed/900)*1.6 };
+}
+
+const SKYLINE = (()=>{ const r = rnd(11), b = []; let x = -400;
+  while (x < 5200){ const w = 40+r()*110, h = 30+r()*(r()<.15 ? 260 : 120); b.push({ x, w, h }); x += w + r()*14; } return b; })();
+const DUST = Array.from({length:70}, (_,i)=>{ const r = rnd(200+i); return { x:r()*W, y:r()*H*.8, s:.6+r()*1.8, v:.2+r()*.6, a:.05+r()*.18 }; });
+
+// ---------- the aircraft (side view, nose to the left, origin = nose, scale 1 ≈ 1.15 px per unit) ----------
+const GREY = "#666b72", GREY_HI = "#8a8f96", NAVY = "#1b2550", NAVY_HI = "#2c3a72";
+function drawPlane(t, X, Y, s, pitch){
+  ctx.save(); ctx.translate(X, Y); ctx.scale(s, s); ctx.rotate(pitch*Math.PI/180);         // nose is on the left, so a positive angle lifts it
+  ctx.translate(-470, -125);          // rotate about the main gear
+  const blink = (Math.floor(t*1.2) % 2) === 0, strobe = (t*1.1 % 1) < .07 || ((t*1.1 % 1) > .14 && (t*1.1 % 1) < .2);
+
+  // far-side engine (mostly hidden)
+  ctx.fillStyle = "#3d4046"; roundRect(400, 60, 120, 40, 18); ctx.fill();
+  // vertical tail
+  ctx.fillStyle = NAVY; ctx.beginPath(); ctx.moveTo(735,-28); ctx.lineTo(842,-215); ctx.lineTo(902,-215); ctx.lineTo(925,-20); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,.06)"; ctx.beginPath(); ctx.moveTo(842,-215); ctx.lineTo(902,-215); ctx.lineTo(900,-196); ctx.lineTo(852,-196); ctx.closePath(); ctx.fill();
+  // fuselage body
+  const fg = ctx.createLinearGradient(0,-40,0,40);
+  fg.addColorStop(0, GREY_HI); fg.addColorStop(.42, GREY); fg.addColorStop(.58, NAVY_HI); fg.addColorStop(1, NAVY);
+  ctx.fillStyle = fg;
+  ctx.beginPath();
+  ctx.moveTo(40,-38); ctx.lineTo(760,-38);
+  ctx.quadraticCurveTo(880,-34, 945,-24);               // tail cone sweeps up
+  ctx.lineTo(950,-14); ctx.quadraticCurveTo(870,10, 760,36);
+  ctx.lineTo(70,38); ctx.bezierCurveTo(10,36, -6,14, -6,0); ctx.bezierCurveTo(-6,-20, 10,-36, 40,-38);
+  ctx.closePath(); ctx.fill();
+  // cheatline: thin red / orange / blue stripes between grey and navy
+  [["#b3262b",2],["#e07a2c",5],["#2c3a72",8]].forEach(([c,o])=>{ ctx.fillStyle=c; ctx.beginPath(); ctx.moveTo(-4,o-1); ctx.lineTo(820,o-4); ctx.lineTo(820,o-1.5); ctx.lineTo(-4,o+1.5); ctx.closePath(); ctx.fill(); });
+  // windows
+  ctx.fillStyle = "rgba(25,30,40,.85)";
+  for (let x = 120; x < 740; x += 13) if (x < 196 || x > 214) { ctx.beginPath(); ctx.ellipse(x, -12, 2.6, 3.6, 0, 0, 7); ctx.fill(); }
+  ctx.fillStyle = "#2a2f3a"; [186, 205, 610].forEach(x => { roundRect(x-6, -27, 14, 30, 3); ctx.fill(); });   // doors
+  // cockpit windows
+  ctx.fillStyle = "#151a24"; ctx.beginPath(); ctx.moveTo(18,-22); ctx.lineTo(56,-25); ctx.lineTo(58,-15); ctx.lineTo(22,-13); ctx.closePath(); ctx.fill();
+  // titles
+  ctx.save(); ctx.fillStyle = NAVY; ctx.font = "700 21px Arial, Helvetica, sans-serif"; ctx.direction="ltr"; ctx.textAlign="left";
+  ctx.fillText("UNITED", 236, -21); ctx.restore();
+  // horizontal stabiliser
+  ctx.fillStyle = "#4b5058"; ctx.beginPath(); ctx.moveTo(800,-14); ctx.lineTo(905,-26); ctx.lineTo(935,-20); ctx.lineTo(880,-4); ctx.closePath(); ctx.fill();
+  // wing (seen edge-on from the side, swept back)
+  ctx.fillStyle = "#555a61"; ctx.beginPath(); ctx.moveTo(330,22); ctx.lineTo(560,30); ctx.lineTo(600,44); ctx.lineTo(380,40); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,.12)"; ctx.fillRect(340,22,220,2);
+  // main landing gear + nose gear
+  ctx.strokeStyle = "#2b2d31"; ctx.lineWidth = 7;
+  ctx.beginPath(); ctx.moveTo(470,36); ctx.lineTo(470,108); ctx.moveTo(90,36); ctx.lineTo(90,108); ctx.stroke();
+  ctx.fillStyle = "#16171a"; [[452,112],[488,112],[82,114],[100,114]].forEach(([x,y])=>{ ctx.beginPath(); ctx.arc(x,y, x>300?17:11, 0, 7); ctx.fill(); });
+  ctx.fillStyle = "#3a3c41"; [[452,112],[488,112]].forEach(([x,y])=>{ ctx.beginPath(); ctx.arc(x,y,6,0,7); ctx.fill(); });
+  // near-side engine with pylon
+  ctx.fillStyle = "#5f646b"; ctx.beginPath(); ctx.moveTo(400,34); ctx.lineTo(470,34); ctx.lineTo(480,58); ctx.lineTo(420,58); ctx.closePath(); ctx.fill();
+  const eg = ctx.createLinearGradient(0,54,0,104); eg.addColorStop(0,"#9aa0a7"); eg.addColorStop(.5,"#6d7279"); eg.addColorStop(1,"#3c4046");
+  ctx.fillStyle = eg; roundRect(352, 54, 142, 50, 22); ctx.fill();
+  ctx.fillStyle = "#202226"; ctx.beginPath(); ctx.ellipse(356, 79, 7, 23, 0, 0, 7); ctx.fill();          // intake
+  ctx.fillStyle = "#4a4e55"; ctx.beginPath(); ctx.moveTo(494,62); ctx.lineTo(522,70); ctx.lineTo(522,90); ctx.lineTo(494,98); ctx.closePath(); ctx.fill();  // exhaust cone
+  // lights: red beacons, white strobes, landing lights on the gear
+  const glow = (x,y,r,c,a)=>{ const g=ctx.createRadialGradient(x,y,0,x,y,r); g.addColorStop(0,c.replace("A",a)); g.addColorStop(1,c.replace("A",0)); ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fill(); };
+  if (blink){ glow(430,-40,30,"rgba(255,40,30,A)",.9); glow(430,40,30,"rgba(255,40,30,A)",.9); }
+  if (strobe){ glow(944,-22,46,"rgba(255,255,255,A)",1); glow(590,42,46,"rgba(255,255,255,A)",1); }
+  if (t > T_HOLD+.5){ glow(96,60,60,"rgba(255,245,220,A)",.75); glow(470,52,50,"rgba(255,245,220,A)",.55); }
+  ctx.restore();
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+function render(t){
+  const P = plane(t), C = cam(t), r0 = rnd(3+Math.floor(t*30));
+  const sx = (r0()-.5)*C.shake, sy = (r0()-.5)*C.shake;
+  ctx.setTransform(1,0,0,1,0,0);
+  // sky: dawn gradient + low sun on the right
+  const sky = ctx.createLinearGradient(0,0,0,GROUND);
+  sky.addColorStop(0,"#2b3f63"); sky.addColorStop(.45,"#7f86a0"); sky.addColorStop(.75,"#e2a877"); sky.addColorStop(1,"#f6c98a");
+  ctx.fillStyle = sky; ctx.fillRect(0,0,W,H);
+  const sunX = 1500 - (C.x-1220)*.03, sunY = 600 - C.y*.1;
+  const sg = ctx.createRadialGradient(sunX,sunY,10,sunX,sunY,620); sg.addColorStop(0,"rgba(255,236,190,.95)"); sg.addColorStop(.08,"rgba(255,214,150,.6)"); sg.addColorStop(1,"rgba(255,180,110,0)");
+  ctx.fillStyle = sg; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = "#fff4d8"; ctx.beginPath(); ctx.arc(sunX, sunY, 34, 0, 7); ctx.fill();
+
+  const layer = (par, fn) => { ctx.save(); ctx.translate(W/2 + sx, H/2 + sy); ctx.scale(C.z, C.z); ctx.translate(-W/2 - (C.x-1220)*par, -H/2 - C.y*par); fn(); ctx.restore(); };
+  // distant city skyline
+  layer(.12, () => { ctx.fillStyle = "rgba(70,62,78,.55)"; SKYLINE.forEach(b => ctx.fillRect(b.x, 690-b.h*.6, b.w, b.h*.6)); });
+  // terminal + control tower
+  layer(.35, () => {
+    ctx.fillStyle = "rgba(52,46,56,.85)"; ctx.fillRect(-600, 670, 1500, 60); ctx.fillRect(1500, 660, 1400, 70);
+    ctx.fillRect(1040, 520, 26, 210); ctx.beginPath(); ctx.moveTo(1010,520); ctx.lineTo(1096,520); ctx.lineTo(1086,488); ctx.lineTo(1020,488); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "rgba(255,210,150,.35)"; for (let x=-560; x<2800; x+=46) ctx.fillRect(x, 690, 22, 6);
+  });
+  // runway, markings and edge lights
+  layer(1, () => {
+    ctx.fillStyle = "#3c3b3d"; ctx.fillRect(-6000, 742, 12000, 150);
+    const rg = ctx.createLinearGradient(0,742,0,892); rg.addColorStop(0,"rgba(255,200,140,.18)"); rg.addColorStop(1,"rgba(0,0,0,.25)"); ctx.fillStyle = rg; ctx.fillRect(-6000,742,12000,150);
+    ctx.fillStyle = "rgba(235,232,220,.75)"; for (let x=-6000; x<6000; x+=180) ctx.fillRect(x, 815, 90, 5);
+    for (let x=-6000; x<6000; x+=150){ [744, 890].forEach(y => { const g = ctx.createRadialGradient(x,y,0,x,y,10); g.addColorStop(0,"rgba(255,235,190,.95)"); g.addColorStop(1,"rgba(255,235,190,0)"); ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,10,0,7); ctx.fill(); }); }
+    ctx.fillStyle = "#2b3020"; ctx.fillRect(-6000, 892, 12000, 400);
+    ctx.fillStyle = "#3b3a2a"; ctx.fillRect(-6000, 716, 12000, 26);
+    // aircraft + its shadow
+    const gy = GROUND - P.lift;
+    ctx.save(); ctx.globalAlpha = clamp(1 - P.lift/400)*.45; ctx.fillStyle = "#000";
+    ctx.beginPath(); ctx.ellipse(centre(P.x), GROUND+36*S, 520*S, 16, 0, 0, 7); ctx.fill(); ctx.restore();
+    drawPlane(t, P.x + 470*S, gy - 4, S, P.pitch);
+  });
+
+  // heat shimmer behind the engine once it spools up
+  const heat = clamp((t - (T_HOLD+.6)) / 1.6) * (t < T_LIFT+1 ? 1 : clamp(1 - (t-T_LIFT-1)));
+  if (heat > 0){
+    const ex = (P.x + 522*S - C.x + 1220 - W/2)*C.z + W/2 + sx, ey = (GROUND - P.lift - 4 + (80-125)*S - C.y - H/2)*C.z + H/2 + sy;
+    for (let k=0; k<26; k++){
+      const yy = ey - 40 + k*4, dx = Math.sin(t*38 + k*1.7)*4*heat;
+      ctx.drawImage(cv, ex, yy, 520, 4, ex + dx, yy, 520, 4);
+    }
+  }
+  // atmosphere: dust in the sun, warm film grade, grain, vignette, letterbox, fades
+  ctx.globalCompositeOperation = "screen";
+  DUST.forEach(d => { const x = (d.x + t*d.v*30) % W, y = (d.y + Math.sin(t*.5+d.x)*10); ctx.fillStyle = `rgba(255,220,170,${d.a})`; ctx.beginPath(); ctx.arc(x,y,d.s,0,7); ctx.fill(); });
+  ctx.globalCompositeOperation = "soft-light"; ctx.fillStyle = "rgba(120,70,30,.35)"; ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation = "source-over"; ctx.fillStyle = "rgba(255,230,190,.05)"; ctx.fillRect(0,0,W,H);
+  const r = rnd(5+Math.floor(t*24)); for (let i=0;i<1400;i++){ ctx.fillStyle = `rgba(${r()<.5?255:0},${r()<.5?240:0},220,${r()*.05})`; ctx.fillRect(r()*W, r()*H, 2, 2); }
+  const vg = ctx.createRadialGradient(W/2,H*.5,H*.35,W/2,H/2,H*1.0); vg.addColorStop(0,"rgba(0,0,0,0)"); vg.addColorStop(1,"rgba(0,0,0,.7)"); ctx.fillStyle = vg; ctx.fillRect(0,0,W,H);
+  const fade = Math.max(clamp(1 - t/1.0), clamp((t-(TL-1.3))/1.3));
+  if (fade > 0){ ctx.fillStyle = `rgba(0,0,0,${fade})`; ctx.fillRect(0,0,W,H); }
+  ctx.fillStyle = "#000"; ctx.fillRect(0,0,W,90); ctx.fillRect(0,H-90,W,90);
+}
+
+// ---------- sound: dawn ambience, taxi idle, spool-up whine, take-off roar ----------
+function buildSound(ac, out, t0){
+  const T = s => t0 + s, master = ac.createGain(); master.connect(out);
+  master.gain.setValueAtTime(0,T(0)); master.gain.linearRampToValueAtTime(1,T(1));
+  master.gain.setValueAtTime(1,T(TL-1.4)); master.gain.linearRampToValueAtTime(0,T(TL));
+  const len = ac.sampleRate*3, nb = ac.createBuffer(1,len,ac.sampleRate), d = nb.getChannelData(0), r = rnd(4); let last = 0;
+  for (let i=0;i<len;i++){ const w = r()*2-1; last = (last + .02*w)/1.02; d[i] = last*3.5*.6 + w*.4; }
+  const noise = () => { const n = ac.createBufferSource(); n.buffer = nb; n.loop = true; return n; };
+  // wind / ambience
+  const amb = noise(), al = ac.createBiquadFilter(); al.type="lowpass"; al.frequency.value=500; const ag = ac.createGain(); ag.gain.value=.05;
+  amb.connect(al); al.connect(ag); ag.connect(master); amb.start(T(0)); amb.stop(T(TL));
+  // engine rumble: filtered noise, rising with thrust
+  const eng = noise(), el = ac.createBiquadFilter(); el.type="lowpass"; el.Q.value=.7; const eg = ac.createGain();
+  el.frequency.setValueAtTime(260,T(0)); el.frequency.linearRampToValueAtTime(320,T(T_HOLD+.6)); el.frequency.linearRampToValueAtTime(1600,T(T_ROLL+1)); el.frequency.linearRampToValueAtTime(2400,T(T_LIFT));
+  eg.gain.setValueAtTime(.12,T(0)); eg.gain.linearRampToValueAtTime(.18,T(T_HOLD+.6)); eg.gain.linearRampToValueAtTime(.55,T(T_ROLL+1)); eg.gain.linearRampToValueAtTime(.7,T(T_LIFT));
+  eg.gain.linearRampToValueAtTime(.35,T(TL-.5));
+  eng.connect(el); el.connect(eg); eg.connect(master); eng.start(T(0)); eng.stop(T(TL));
+  // turbine whine
+  const wh = ac.createOscillator(), wg = ac.createGain(); wh.type="sawtooth";
+  wh.frequency.setValueAtTime(480,T(0)); wh.frequency.linearRampToValueAtTime(520,T(T_HOLD+.6)); wh.frequency.exponentialRampToValueAtTime(2300,T(T_ROLL+.6)); wh.frequency.linearRampToValueAtTime(2150,T(TL));
+  const wl = ac.createBiquadFilter(); wl.type="bandpass"; wl.Q.value=6; wl.frequency.setValueAtTime(900,T(0)); wl.frequency.linearRampToValueAtTime(2600,T(T_ROLL+.6));
+  wg.gain.setValueAtTime(.008,T(0)); wg.gain.linearRampToValueAtTime(.02,T(T_HOLD+.6)); wg.gain.linearRampToValueAtTime(.05,T(T_ROLL+.5)); wg.gain.linearRampToValueAtTime(.025,T(TL));
+  wh.connect(wl); wl.connect(wg); wg.connect(master); wh.start(T(0)); wh.stop(T(TL));
+  // low swell when the brakes release
+  const o = ac.createOscillator(), og = ac.createGain(); o.frequency.setValueAtTime(48,T(T_ROLL)); o.frequency.linearRampToValueAtTime(62,T(T_LIFT));
+  og.gain.setValueAtTime(0,T(T_ROLL)); og.gain.linearRampToValueAtTime(.25,T(T_ROLL+1.5)); og.gain.linearRampToValueAtTime(0,T(TL));
+  o.connect(og); og.connect(master); o.start(T(T_ROLL)); o.stop(T(TL));
+}
+async function renderSoundtrack(){ const oac = new OfflineAudioContext(2, Math.ceil(48000*TL), 48000); buildSound(oac, oac.destination, 0); return oac.startRendering(); }
+function encodeWav(buf){
+  const ch=buf.numberOfChannels, len=buf.length, sr=buf.sampleRate, v=new DataView(new ArrayBuffer(44+len*ch*2));
+  const w=(o,s)=>{ for (let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
+  w(0,"RIFF"); v.setUint32(4,36+len*ch*2,true); w(8,"WAVEfmt "); v.setUint32(16,16,true); v.setUint16(20,1,true);
+  v.setUint16(22,ch,true); v.setUint32(24,sr,true); v.setUint32(28,sr*ch*2,true); v.setUint16(32,ch*2,true); v.setUint16(34,16,true);
+  w(36,"data"); v.setUint32(40,len*ch*2,true);
+  const cs=[...Array(ch)].map((_,c)=>buf.getChannelData(c));
+  for (let i=0,o=44;i<len;i++) for (let c=0;c<ch;c++,o+=2){ const x=Math.max(-1,Math.min(1,cs[c][i])); v.setInt16(o, x<0?x*0x8000:x*0x7fff, true); }
+  return new Blob([v],{type:"audio/wav"});
+}
+
+let AC = null;
+document.getElementById("play").onclick = () => {
+  AC = AC || new AudioContext(); AC.resume();
+  const t0 = AC.currentTime + .1; buildSound(AC, AC.destination, t0);
+  document.body.classList.add("playing");
+  const loop = () => { const t = AC.currentTime - t0; render(clamp(t,0,TL)); if (t<TL) requestAnimationFrame(loop); else document.body.classList.remove("playing"); };
+  requestAnimationFrame(loop);
+};
+render(6); window.__render = render; window.__TL = TL;
+</script>
+</body>
+</html>

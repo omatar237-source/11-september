@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>صورة مصغّرة 11 سبتمبر</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@700;900&family=Reem+Kufi:wght@700&display=swap" rel="stylesheet">
+<style>
+  html,body { margin:0; height:100%; background:#050506; display:flex; align-items:center; justify-content:center; }
+  canvas { width:min(100vw, calc(100vh * 16 / 9)); height:auto; aspect-ratio:16/9; display:block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1280" height="720"></canvas>
+<script>
+// YouTube thumbnail (1280×720): presenter on the right with a cinematic grade, bold Arabic
+// title on the left, the towers photo blended in between.
+const PHOTO = "__PHOTO__", TOWERS = "__TOWERS__";
+let TW = null;
+const mk = (w, h) => { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; };
+const TITLE_SMALL = "ماذا حدث فعلاً؟";
+const W = 1280, H = 720;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+
+function plane(x, y, ang, sc, color){
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang); ctx.scale(sc, sc); ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(30,0); ctx.quadraticCurveTo(28,-4, 20,-4.5); ctx.lineTo(4,-4.5); ctx.lineTo(-6,-30); ctx.lineTo(-12,-30); ctx.lineTo(-6,-4.5);
+  ctx.lineTo(-22,-4); ctx.lineTo(-28,-13); ctx.lineTo(-32,-13); ctx.lineTo(-29,-3); ctx.lineTo(-32,0); ctx.lineTo(-29,3); ctx.lineTo(-32,13); ctx.lineTo(-28,13); ctx.lineTo(-22,4);
+  ctx.lineTo(-6,4.5); ctx.lineTo(-12,30); ctx.lineTo(-6,30); ctx.lineTo(4,4.5); ctx.lineTo(20,4.5); ctx.quadraticCurveTo(28,4, 30,0);
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+
+function draw(img){
+  ctx.fillStyle = "#050506"; ctx.fillRect(0,0,W,H);
+  // presenter: scale to full height, centre him at x≈930
+  const s = H / img.height, iw = img.width*s, ix = 930 - 680*s;
+  ctx.save(); ctx.filter = "contrast(1.18) saturate(.82) brightness(.92)"; ctx.drawImage(img, ix, 0, iw, H); ctx.restore();
+  // cool-dark grade over the map, warm red key light on the presenter's side
+  ctx.globalCompositeOperation = "multiply"; ctx.fillStyle = "#8a98b0"; ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation = "screen";
+  const key = ctx.createRadialGradient(950, 250, 30, 960, 300, 520); key.addColorStop(0, "rgba(255,190,150,.45)"); key.addColorStop(.5, "rgba(255,110,70,.22)"); key.addColorStop(1, "rgba(255,80,40,0)");
+  ctx.fillStyle = key; ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation = "source-over";
+  // dark band behind the title so it always reads
+  const band = ctx.createLinearGradient(0,0,820,0); band.addColorStop(0, "rgba(4,5,8,.97)"); band.addColorStop(.5, "rgba(4,5,8,.9)"); band.addColorStop(.85, "rgba(4,5,8,.6)"); band.addColorStop(1, "rgba(4,5,8,0)");
+  ctx.fillStyle = band; ctx.fillRect(0,0,820,H);
+
+  // ---- towers photo (supplied by the channel owner), graded and faded into the layout ----
+  if (TW){
+    const L = mk(W, H), g = L.getContext("2d");
+    // crop: the towers, fire and smoke from the right half of the source
+    const sx = 600, sy = 0, sw = 560, sh = 640, dh = H, dw = sw*dh/sh, dx = 270;
+    g.filter = "contrast(1.25) saturate(.9) brightness(.82)"; g.drawImage(TW, sx, sy, sw, sh, dx, 0, dw, dh); g.filter = "none";
+    // warm-dark grade so the blue sky matches the thumbnail
+    g.globalCompositeOperation = "multiply"; g.fillStyle = "#9a7a6a"; g.fillRect(0,0,W,H);
+    g.globalCompositeOperation = "overlay"; g.fillStyle = "rgba(255,110,40,.25)"; g.fillRect(0,0,W,H);
+    // soft edges: fade left into the title column and right into the presenter
+    g.globalCompositeOperation = "destination-in";
+    const m = g.createLinearGradient(dx, 0, dx + dw, 0);
+    m.addColorStop(0, "rgba(0,0,0,0)"); m.addColorStop(.18, "rgba(0,0,0,1)"); m.addColorStop(.68, "rgba(0,0,0,1)"); m.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = m; g.fillRect(0,0,W,H);
+    ctx.drawImage(L, 0, 0);
+  }
+  // ground haze so the towers sink into the dark
+  const haze = ctx.createLinearGradient(0, 470, 0, H); haze.addColorStop(0, "rgba(4,5,8,0)"); haze.addColorStop(1, "rgba(4,5,8,.95)");
+  ctx.fillStyle = haze; ctx.fillRect(0, 470, W, H - 470);
+
+  // ---- title ----
+  ctx.save(); ctx.lineJoin = "round";
+  ctx.direction = "ltr"; ctx.textAlign = "left"; ctx.font = "900 196px Cairo";
+  ctx.shadowColor = "rgba(0,0,0,.9)"; ctx.shadowBlur = 30; ctx.shadowOffsetY = 8;
+  ctx.lineWidth = 14; ctx.strokeStyle = "#08080a"; ctx.strokeText("11", 36, 236);
+  ctx.shadowColor = "transparent";
+  const red = ctx.createLinearGradient(0, 90, 0, 236); red.addColorStop(0, "#ff4d4d"); red.addColorStop(1, "#b5121b"); ctx.fillStyle = red; ctx.fillText("11", 36, 236);
+  ctx.direction = "rtl"; ctx.textAlign = "right"; ctx.font = "900 116px Cairo";
+  ctx.shadowColor = "rgba(0,0,0,.9)"; ctx.shadowBlur = 30; ctx.shadowOffsetY = 8;
+  ctx.lineWidth = 12; ctx.strokeStyle = "#08080a"; ctx.strokeText("سبتمبر", 430, 380);
+  ctx.shadowColor = "transparent";
+  const steel = ctx.createLinearGradient(0, 290, 0, 395); steel.addColorStop(0, "#ffffff"); steel.addColorStop(.55, "#e9edf3"); steel.addColorStop(1, "#aab3c0");
+  ctx.fillStyle = steel; ctx.fillText("سبتمبر", 430, 380);
+  ctx.restore();
+  // hook on a clean yellow tag with a dark drop
+  ctx.save(); ctx.font = "900 52px Cairo"; ctx.direction = "rtl"; ctx.textAlign = "right";
+  const tw = ctx.measureText(TITLE_SMALL).width, tx = 440, ty = 492;
+  ctx.rotate(-1.2*Math.PI/180);
+  ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(tx - tw - 30, ty - 50, tw + 56, 80);
+  ctx.fillStyle = "#ffd21f"; ctx.fillRect(tx - tw - 38, ty - 58, tw + 56, 80);
+  ctx.fillStyle = "#0a0a0c"; ctx.fillText(TITLE_SMALL, tx - 8, ty + 2);
+  ctx.restore();
+  // small date line
+  ctx.save(); ctx.direction = "ltr"; ctx.textAlign = "left"; ctx.font = "900 34px Cairo"; ctx.fillStyle = "#e3262f";
+  ctx.fillRect(46, 618, 8, 44); ctx.fillStyle = "#ffffff"; ctx.fillText("SEPTEMBER 11 · 2001", 68, 652); ctx.restore();
+  // frame accent + vignette
+  const vg = ctx.createRadialGradient(W*.62, H*.45, H*.35, W/2, H/2, H*1.05); vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.6)");
+  ctx.fillStyle = vg; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = "#e3262f"; ctx.fillRect(0, 0, W, 10); ctx.fillRect(0, H-10, W, 10);
+  window.__done = true;
+}
+const loadImg = src => new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
+document.fonts.load("900 100px Cairo").finally(async () => { TW = await loadImg(TOWERS); draw(await loadImg(PHOTO)); });
+</script>
+</body>
+</html>

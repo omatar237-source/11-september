@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>حسابات التواصل</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  html,body { margin:0; height:100%; background:#00b140; overflow:hidden; font-family:Cairo, sans-serif; }
+  #stage { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { width:min(100vw, calc(100vh * 16 / 9)); height:auto; aspect-ratio:16/9; display:block; }
+  #play { position:fixed; bottom:16px; right:16px; z-index:2; background:#13213a; color:#fff; border:1px solid #3b5277; border-radius:6px; padding:8px 16px; font:inherit; cursor:pointer; }
+  body.playing #play { display:none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<button id="play">▶ تشغيل</button>
+<script>
+// Chroma-key "follow me" stack: three cards (Instagram, TikTok, Facebook) slide in one above the
+// other; a cursor clicks FOLLOW on each. Platform badges are simplified original drawings in each
+// platform's colours; all sound effects are synthesised. No green in the artwork.
+const ACCOUNTS = [
+  { kind:"ig", name:"Instagram", handle:"@Omarmatar26" },
+  { kind:"tt", name:"TikTok",    handle:"@Omarmatar32" },
+  { kind:"fb", name:"Facebook",  handle:"@Omarmatar" },
+];
+const W = 1920, H = 1080, TL = 8.5, KEY = "#00b140";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const clamp = (v,a=0,b=1) => Math.max(a, Math.min(b, v));
+const lerp = (a,b,t) => a + (b-a)*t;
+const ease = t => t<.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+const easeOut = t => 1 - Math.pow(1-t,3);
+const back = t => { const c = 1.7; return 1 + (c+1)*Math.pow(t-1,3) + c*Math.pow(t-1,2); };
+
+const CW = 980, CH = 150, GAP = 34, CX = W/2, TOP = (H - (3*CH + 2*GAP))/2;   // stack centred vertically
+const rowY = i => TOP + i*(CH+GAP) + CH/2;
+const IN = i => .25 + i*.35;                     // card i slides in
+const CLICK = i => 2.4 + i*1.15;                 // FOLLOW clicked on card i
+const OUT = 7.6;
+const btn = i => ({ x: CX + CW/2 - 300, y: rowY(i) - 34, w: 250, h: 68 });
+
+function rr(x, y, w, h, r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+// simplified platform badges (original drawings), 100×100 centred on (x,y)
+function badge(kind, x, y, s){
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  if (kind === "ig"){
+    const g = ctx.createLinearGradient(-50, 50, 50, -50); g.addColorStop(0, "#f9b233"); g.addColorStop(.35, "#ee2a7b"); g.addColorStop(.7, "#a334c8"); g.addColorStop(1, "#5b51d8");
+    rr(-50,-50,100,100,28); ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 7; rr(-28,-28,56,56,16); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0,0,13,0,7); ctx.stroke(); ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(17,-17,4.5,0,7); ctx.fill();
+  } else if (kind === "tt"){
+    rr(-50,-50,100,100,28); ctx.fillStyle = "#111114"; ctx.fill();
+    const note = (dx, dy, c) => { ctx.save(); ctx.translate(dx, dy); ctx.fillStyle = c; ctx.strokeStyle = c; ctx.lineWidth = 9; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.arc(-9, 16, 12, 0, 7); ctx.fill(); ctx.beginPath(); ctx.moveTo(3, 16); ctx.lineTo(3, -26); ctx.quadraticCurveTo(8, -12, 22, -10); ctx.stroke(); ctx.restore(); };
+    note(-3, -2, "#25f4ee"); note(3, 2, "#fe2c55"); note(0, 0, "#ffffff");
+  } else {
+    ctx.fillStyle = "#1877f2"; ctx.beginPath(); ctx.arc(0,0,50,0,7); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.font = "900 78px Arial, Helvetica, sans-serif"; ctx.textAlign = "center"; ctx.direction = "ltr"; ctx.fillText("f", 5, 30);
+  }
+  ctx.restore();
+}
+function cursor(x, y, press){
+  ctx.save(); ctx.translate(x, y); const s = 1.6*(1 - .12*press); ctx.scale(s, s);
+  ctx.shadowColor = "rgba(0,0,0,.35)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 3;
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = "#111"; ctx.lineWidth = 2.2; ctx.lineJoin = "round";
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(0,34); ctx.lineTo(9,26); ctx.lineTo(15,40); ctx.lineTo(21,37); ctx.lineTo(15,24); ctx.lineTo(26,24); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+function ripple(x, y, t0, t, color){
+  const k = (t - t0)/.45; if (k < 0 || k > 1) return;
+  ctx.save(); ctx.strokeStyle = color; ctx.globalAlpha = 1 - k; ctx.lineWidth = 6*(1-k) + 1; ctx.beginPath(); ctx.arc(x, y, 20 + 60*easeOut(k), 0, 7); ctx.stroke(); ctx.restore();
+}
+const press = (t, at) => { const d = t - at; return d > -.08 && d < .14 ? 1 - Math.abs(d - .03)/.11 : 0; };
+const ACCENT = { ig:"#ee2a7b", tt:"#fe2c55", fb:"#1877f2" };
+
+function cursorPos(t){
+  const pts = [[W+80, H+60], ...ACCOUNTS.map((_,i) => { const b = btn(i); return [b.x + b.w*.55, b.y + b.h*.62]; }), [W+120, H+80]];
+  const times = [1.6, ...ACCOUNTS.map((_,i) => CLICK(i)), OUT + .6];
+  for (let k=0; k<times.length-1; k++){
+    if (t < times[k+1]){ const start = times[k] + (k ? .3 : 0), p = ease(clamp((t - start)/(times[k+1] - .12 - start)));
+      return [lerp(pts[k][0], pts[k+1][0], p), lerp(pts[k][1], pts[k+1][1], p) - Math.sin(p*Math.PI)*(k ? 30 : 0)]; }
+  }
+  return pts[pts.length-1];
+}
+
+function render(t){
+  ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha = 1; ctx.fillStyle = KEY; ctx.fillRect(0,0,W,H);
+  ACCOUNTS.forEach((A, i) => {
+    const k = clamp((t - IN(i))/.55), o = clamp((t - OUT - i*.08)/.45);
+    if (k <= 0 || o >= 1) return;
+    const y = rowY(i), followed = t >= CLICK(i);
+    ctx.save(); ctx.globalAlpha = clamp(k*2)*(1 - ease(o));
+    ctx.translate(lerp(-700, 0, back(k)) + lerp(0, 900, ease(o)), 0);
+    ctx.save(); ctx.shadowColor = "rgba(0,0,0,.3)"; ctx.shadowBlur = 34; ctx.shadowOffsetY = 12;
+    rr(CX - CW/2, y - CH/2, CW, CH, CH/2); ctx.fillStyle = "#fff"; ctx.fill(); ctx.restore();
+    badge(A.kind, CX - CW/2 + CH/2, y, .95*back(clamp((t - IN(i) - .2)/.4)));
+    ctx.textAlign = "left"; ctx.direction = "ltr";
+    ctx.fillStyle = "#707078"; ctx.font = "700 28px Cairo"; ctx.fillText(A.name, CX - CW/2 + CH + 10, y - 16);
+    const typed = A.handle.slice(0, Math.ceil(A.handle.length*clamp((t - IN(i) - .35)/.6)));
+    ctx.fillStyle = "#0f0f10"; ctx.font = "900 48px Cairo"; ctx.fillText(typed, CX - CW/2 + CH + 10, y + 36);
+    // follow button
+    const b = btn(i), bp = press(t, CLICK(i)), pop = followed ? back(clamp((t - CLICK(i))/.3)) : 1;
+    ctx.save(); ctx.translate(b.x + b.w/2, b.y + b.h/2); const sc = (1 - .06*bp)*(followed ? lerp(.9, 1, pop) : 1); ctx.scale(sc, sc);
+    rr(-b.w/2, -b.h/2, b.w, b.h, b.h/2); ctx.fillStyle = followed ? "#e5e5e8" : ACCENT[A.kind]; ctx.fill();
+    ctx.textAlign = "center"; ctx.fillStyle = followed ? "#2b2b30" : "#fff"; ctx.font = "900 28px Cairo"; ctx.fillText(followed ? "FOLLOWING ✓" : "FOLLOW", 0, 10);
+    ctx.restore();
+    ripple(b.x + b.w/2, b.y + b.h/2, CLICK(i), t, ACCENT[A.kind]);
+    ctx.restore();
+  });
+  if (t > 1.6 && t < OUT + .6){ const [x, y] = cursorPos(t); cursor(x, y, Math.max(...ACCOUNTS.map((_,i) => press(t, CLICK(i))))); }
+}
+
+// ---------- synthesised sound effects ----------
+function buildSound(ac, out, t0){
+  const T0 = s => t0 + s, master = ac.createGain(); master.gain.value = .9; master.connect(out);
+  const len = ac.sampleRate, nb = ac.createBuffer(1, len, ac.sampleRate), d = nb.getChannelData(0); let s = 3;
+  for (let i=0;i<len;i++){ s = (s*16807) % 2147483647; d[i] = s/2147483647*2 - 1; }
+  const noise = () => { const n = ac.createBufferSource(); n.buffer = nb; n.loop = true; return n; };
+  const whoosh = (at, dur, f0, f1, vol) => { const n = noise(), bp = ac.createBiquadFilter(), g = ac.createGain(); bp.type = "bandpass"; bp.Q.value = 1.4;
+    bp.frequency.setValueAtTime(f0, T0(at)); bp.frequency.exponentialRampToValueAtTime(f1, T0(at+dur));
+    g.gain.setValueAtTime(0, T0(at)); g.gain.linearRampToValueAtTime(vol, T0(at+dur*.4)); g.gain.linearRampToValueAtTime(0, T0(at+dur));
+    n.connect(bp); bp.connect(g); g.connect(master); n.start(T0(at)); n.stop(T0(at+dur+.05)); };
+  const click = (at) => { const n = noise(), hp = ac.createBiquadFilter(), g = ac.createGain(); hp.type = "highpass"; hp.frequency.value = 2500;
+    g.gain.setValueAtTime(0, T0(at)); g.gain.linearRampToValueAtTime(.5, T0(at+.002)); g.gain.exponentialRampToValueAtTime(.001, T0(at+.04));
+    n.connect(hp); hp.connect(g); g.connect(master); n.start(T0(at)); n.stop(T0(at+.06));
+    const o = ac.createOscillator(), og = ac.createGain(); o.frequency.setValueAtTime(1800, T0(at)); o.frequency.exponentialRampToValueAtTime(600, T0(at+.03));
+    og.gain.setValueAtTime(.25, T0(at)); og.gain.exponentialRampToValueAtTime(.001, T0(at+.05)); o.connect(og); og.connect(master); o.start(T0(at)); o.stop(T0(at+.06)); };
+  const pop = (at, f, v=.4) => { const o = ac.createOscillator(), g = ac.createGain(); o.frequency.setValueAtTime(f, T0(at)); o.frequency.exponentialRampToValueAtTime(f*2.2, T0(at+.08));
+    g.gain.setValueAtTime(0, T0(at)); g.gain.linearRampToValueAtTime(v, T0(at+.01)); g.gain.exponentialRampToValueAtTime(.001, T0(at+.18)); o.connect(g); g.connect(master); o.start(T0(at)); o.stop(T0(at+.2)); };
+  const chime = (at, f) => { [[f,.18],[f*2,.06],[f*1.5,.05]].forEach(([fr,v]) => { const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = fr;
+    g.gain.setValueAtTime(0, T0(at)); g.gain.linearRampToValueAtTime(v, T0(at+.005)); g.gain.exponentialRampToValueAtTime(.0005, T0(at+.6)); o.connect(g); g.connect(master); o.start(T0(at)); o.stop(T0(at+.65)); }); };
+  ACCOUNTS.forEach((_, i) => { whoosh(IN(i) - .05, .5, 300, 2000, .28); pop(IN(i) + .35, 420 + i*80, .3); });
+  whoosh(1.6, .5, 1200, 500, .08);
+  ACCOUNTS.forEach((_, i) => { click(CLICK(i)); pop(CLICK(i) + .04, 520, .3); chime(CLICK(i) + .06, [1046.5, 1318.5, 1568][i]); });
+  whoosh(OUT, .6, 2000, 250, .32);
+}
+async function renderSoundtrack(){ const oac = new OfflineAudioContext(2, Math.ceil(48000*TL), 48000); buildSound(oac, oac.destination, 0); return oac.startRendering(); }
+function encodeWav(buf){
+  const ch=buf.numberOfChannels, len=buf.length, sr=buf.sampleRate, v=new DataView(new ArrayBuffer(44+len*ch*2));
+  const w=(o,s)=>{ for (let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
+  w(0,"RIFF"); v.setUint32(4,36+len*ch*2,true); w(8,"WAVEfmt "); v.setUint32(16,16,true); v.setUint16(20,1,true);
+  v.setUint16(22,ch,true); v.setUint32(24,sr,true); v.setUint32(28,sr*ch*2,true); v.setUint16(32,ch*2,true); v.setUint16(34,16,true);
+  w(36,"data"); v.setUint32(40,len*ch*2,true);
+  const cs=[...Array(ch)].map((_,c)=>buf.getChannelData(c));
+  for (let i=0,o=44;i<len;i++) for (let c=0;c<ch;c++,o+=2){ const x=Math.max(-1,Math.min(1,cs[c][i])); v.setInt16(o, x<0?x*0x8000:x*0x7fff, true); }
+  return new Blob([v],{type:"audio/wav"});
+}
+
+let AC = null;
+document.getElementById("play").onclick = () => {
+  AC = AC || new AudioContext(); AC.resume(); const t0 = AC.currentTime + .1; buildSound(AC, AC.destination, t0); document.body.classList.add("playing");
+  const loop = () => { const t = AC.currentTime - t0; render(clamp(t,0,TL)); if (t<TL) requestAnimationFrame(loop); else document.body.classList.remove("playing"); };
+  requestAnimationFrame(loop);
+};
+document.fonts.load("900 50px Cairo").finally(() => { render(6); window.__render = render; window.__TL = TL; });
+</script>
+</body>
+</html>
